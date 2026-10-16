@@ -1,0 +1,54 @@
+# ${...} placeholders are substituted by scripts/01-provision.sh via
+# `envsubst` after `terraform apply` -- this repo deliberately avoids a
+# templating engine (Helm/Kustomize) for the app manifests to keep them
+# readable top to bottom during the talk.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: storefront
+  namespace: nimbus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: storefront
+  template:
+    metadata:
+      labels:
+        app: storefront
+    spec:
+      containers:
+        - name: storefront
+          image: ${IMAGE_REGISTRY}/storefront:${IMAGE_TAG}
+          ports:
+            - containerPort: 8000
+          env:
+            - name: DATABASE_URL
+              value: "postgresql://${DB_MASTER_USERNAME}:${DB_MASTER_PASSWORD}@${RDS_ENDPOINT}:5432/${DB_NAME}?sslmode=require"
+            - name: AGENT_INSECURE_URL
+              value: "http://agent-insecure.nimbus.svc.cluster.local:8000"
+            - name: AGENT_SECURE_URL
+              value: "http://agent-secure.agents.svc.cluster.local:8000"
+          readinessProbe:
+            httpGet:
+              path: /api/products
+              port: 8000
+            initialDelaySeconds: 3
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 250m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: storefront
+  namespace: nimbus
+spec:
+  # ClusterIP, not LoadBalancer -- no reason to pay for an ELB for a laptop
+  # demo. Drive it with:
+  #   kubectl -n nimbus port-forward svc/storefront 8000:8000
+  selector:
+    app: storefront
+  ports:
+    - port: 8000
+      targetPort: 8000

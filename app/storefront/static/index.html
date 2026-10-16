@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Nimbus Store</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="wordmark">☁ Nimbus Store</div>
+    <div class="topbar-controls">
+      <label class="field-inline">
+        Shopping as
+        <select id="customer-picker"></select>
+      </label>
+      <label class="field-inline">
+        Support agent
+        <select id="agent-picker">
+          <option value="insecure">Legacy (standing credential)</option>
+          <option value="secure" selected>Zero-trust (SPIFFE + Vault JIT)</option>
+        </select>
+      </label>
+      <button id="reset-btn" class="btn-ghost" title="Reset demo state">↺ Reset</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="shop">
+      <h2>Catalog</h2>
+      <div id="products" class="product-grid"></div>
+
+      <h2>My Orders</h2>
+      <div id="orders" class="order-list"></div>
+
+      <h2>Support</h2>
+      <div id="chat-log" class="chat-log"></div>
+      <form id="chat-form" class="chat-form">
+        <input id="chat-input" type="text" placeholder="e.g. Please refund order #1042" autocomplete="off" />
+        <button type="submit">Send</button>
+      </form>
+
+      <div id="approval-card" class="approval-card hidden">
+        <div class="approval-text"></div>
+        <div class="approval-row">
+          <input id="approver-name" type="text" placeholder="Your name" />
+          <button id="approve-btn">Approve</button>
+        </div>
+      </div>
+    </section>
+
+    <aside class="panel">
+      <h2>Identity &amp; Access</h2>
+
+      <div class="tile" id="tile-identity">
+        <div class="tile-label">Workload identity</div>
+        <div class="tile-value" id="identity-value">—</div>
+        <div class="tile-sub" id="identity-sub"></div>
+      </div>
+
+      <div class="tile" id="tile-lease">
+        <div class="tile-label">Vault credential</div>
+        <div class="tile-value" id="lease-value">—</div>
+        <div class="meter"><div class="meter-fill" id="lease-meter"></div></div>
+        <div class="tile-sub" id="lease-sub"></div>
+        <button id="revoke-btn" class="btn-danger hidden">⨯ Revoke now</button>
+      </div>
+
+      <div class="tile" id="tile-scope">
+        <div class="tile-label">Scope</div>
+        <ul class="scope-list" id="scope-list"></ul>
+      </div>
+
+      <div class="tile">
+        <div class="tile-label">Audit log</div>
+        <ul class="event-log" id="event-log"></ul>
+      </div>
+    </aside>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

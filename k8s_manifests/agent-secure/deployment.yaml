@@ -1,0 +1,110 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-secure
+  namespace: agents
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-support-agent-secure
+  template:
+    metadata:
+      # app label is load-bearing: SPIRE's ClusterSPIFFEID podSelector
+      # matches on it. Renaming it breaks identity issuance, not just
+      # scheduling.
+      labels:
+        app: ai-support-agent-secure
+    spec:
+      serviceAccountName: ai-support-agent-secure
+      containers:
+        - name: agent
+          image: ${IMAGE_REGISTRY}/agent:${IMAGE_TAG}
+          ports:
+            - containerPort: 8000
+          env:
+            - name: AGENT_MODE
+              value: secure
+            - name: AGENT_NAME
+              value: support-agent-secure
+            - name: DATABASE_HOST
+              value: "${RDS_ENDPOINT}"
+            - name: DATABASE_NAME
+              value: "${DB_NAME}"
+            - name: VAULT_ADDR
+              value: "${VAULT_ADDR}"
+            # Flip to "spiffe" only after scripts/03-verify.sh's probe has
+            # confirmed auth/spiffe is actually enabled on this cluster --
+            # see docs/RUNBOOK.md.
+            - name: VAULT_AUTH_METHOD
+              value: "${VAULT_AUTH_METHOD:-jwt}"
+            - name: VAULT_AUTH_MOUNT
+              value: "${VAULT_AUTH_MOUNT:-jwt}"
+            - name: VAULT_ROLE
+              value: ai-support-agent
+            - name: VAULT_ROLE_POLICY
+              value: agent-support
+            - name: VAULT_JWT_AUDIENCE
+              value: vault
+            - name: VAULT_DB_MOUNT
+              value: database
+            - name: VAULT_DB_ROLE
+              value: refund-writer
+            - name: SVID_PATH
+              value: /svids/jwt_svid.token
+            - name: AGENT_ENGINE
+              value: "${AGENT_ENGINE:-deterministic}"
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef: { name: anthropic-api-key, key: value, optional: true }
+          volumeMounts:
+            - name: svids
+              mountPath: /svids
+              readOnly: true
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            initialDelaySeconds: 3
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 250m, memory: 256Mi }
+
+        - name: spiffe-helper
+          image: ghcr.io/spiffe/spiffe-helper:latest
+          args: ["-config", "/etc/spiffe-helper/helper.conf"]
+          volumeMounts:
+            - name: spiffe-workload-api
+              mountPath: /spiffe-workload-api
+              readOnly: true
+            - name: svids
+              mountPath: /svids
+            - name: helper-config
+              mountPath: /etc/spiffe-helper
+              readOnly: true
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+
+      volumes:
+        # No hostPath, no privileged pod -- the CSI driver bind-mounts the
+        # SPIRE Agent's Workload API socket read-only.
+        - name: spiffe-workload-api
+          csi:
+            driver: csi.spiffe.io
+            readOnly: true
+        - name: svids
+          emptyDir: {}
+        - name: helper-config
+          configMap:
+            name: spiffe-helper-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-secure
+  namespace: agents
+spec:
+  selector:
+    app: ai-support-agent-secure
+  ports:
+    - port: 8000
+      targetPort: 8000

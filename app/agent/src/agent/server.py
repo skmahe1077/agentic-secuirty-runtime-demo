@@ -1,0 +1,90 @@
+"""HTTP wrapper around one agent engine.
+
+One image, two running shapes: `AGENT_MODE=insecure` with a static
+database.Session, or `AGENT_MODE=secure` with a SPIFFE-backed VaultSession.
+Which `Engine` implementation answers `/chat` is a separate axis
+(`AGENT_ENGINE`), so the identity/credential story and the LLM-vs-test-mode
+story can vary independently.
+"""
+from __future__ import annotations
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+from config import load_settings
+from deterministic_engine import DeterministicEngine
+from vault import build_session
+
+settings = load_settings()
+session = build_session(settings)
+
+if settings.agent_engine == "langchain":
+    from langchain_engine import LangChainEngine  # heavy import, only when needed
+
+    engine = LangChainEngine(settings, session)
+else:
+    engine = DeterministicEngine(settings, session)
+
+app = FastAPI(title=f"agent ({settings.agent_mode})")
+
+
+class ChatRequest(BaseModel):
+    customer_id: int
+    message: str
+    thread_id: str = "demo"
+
+
+@app.post("/chat")
+def chat(req: ChatRequest):
+    result = engine.handle_message(req.customer_id, req.message, req.thread_id)
+    return {
+        "reply": result.reply,
+        "events": result.events,
+        "requires_approval": result.requires_approval,
+        "approval_id": result.approval_id,
+        "approval_text": result.approval_text,
+    }
+
+
+class ResumeRequest(BaseModel):
+    thread_id: str = "demo"
+    approved_by: str
+
+
+@app.post("/resume")
+def resume(req: ResumeRequest):
+    result = engine.handle_resume(req.thread_id, req.approved_by)
+    return {
+        "reply": result.reply,
+        "events": result.events,
+        "requires_approval": result.requires_approval,
+        "approval_id": result.approval_id,
+        "approval_text": result.approval_text,
+    }
+
+
+@app.post("/vault/revoke")
+def vault_revoke():
+    event = session.revoke()
+    if event is None:
+        raise HTTPException(409, "no active credential to revoke")
+    return {"events": [event]}
+
+
+@app.post("/vault/forget")
+def vault_forget():
+    """Drops this process's cached credential/client without calling Vault
+    -- use after revoking leases out of band (scripts/reset.sh) so the next
+    request re-mints instead of retrying a lease Vault already killed."""
+    session.forget()
+    return {"ok": True}
+
+
+@app.get("/status")
+def status():
+    return session.status()
+
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True, "mode": settings.agent_mode, "engine": settings.agent_engine}

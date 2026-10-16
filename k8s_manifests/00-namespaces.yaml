@@ -1,0 +1,14 @@
+# `agents` is deliberately its own namespace: SPIRE's ClusterSPIFFEID
+# (spire/values.yaml) assigns identity by namespace+serviceaccount, so this
+# is the namespace boundary the whole SPIFFE story hangs off. `nimbus`
+# holds the storefront and the insecure agent, which have no SPIFFE
+# identity at all -- that absence is itself part of beat 1.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nimbus
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agents

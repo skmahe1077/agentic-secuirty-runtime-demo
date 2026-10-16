@@ -1,0 +1,128 @@
+name: nimbus-demo
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: vaultadmin
+      POSTGRES_PASSWORD: localdevonly
+      POSTGRES_DB: nimbus
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./app/db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vaultadmin -d nimbus"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  # Local stand-in for the Vault consumed in the demo. Dev mode auto-unseals
+  # with a known root token -- fine for local iteration, never for the real
+  # HCP Vault Dedicated cluster used on stage.
+  vault:
+    image: hashicorp/vault:1.18.0
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: root
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    ports:
+      - "8200:8200"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8200/v1/sys/health?standbyok=true"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  # Vault ENTERPRISE, for testing Agentic IAM (Agent Registry, OAuth
+  # resource server, RAR) once you have a trial license -- see
+  # docs/RUNBOOK.md's "Agentic IAM" section. NOT part of the default stack:
+  # `docker compose --profile enterprise up vault-enterprise`. Needs
+  # VAULT_LICENSE set in your shell (or a .env file -- gitignored) to the
+  # license string; without it the container exits immediately with
+  # "license check failed: no autoloaded license provided" -- confirmed by
+  # direct test, there is no dev-mode auto-license. Separate port (8210)
+  # from the regular `vault` service (8200) so both can run side by side.
+  vault-enterprise:
+    image: hashicorp/vault-enterprise:latest
+    profiles: ["enterprise"]
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_LICENSE: "${VAULT_LICENSE:-}"
+      VAULT_DEV_ROOT_TOKEN_ID: root
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    ports:
+      - "8210:8200"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8200/v1/sys/health?standbyok=true"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  storefront:
+    build:
+      context: .
+      dockerfile: app/storefront/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://vaultadmin:localdevonly@postgres:5432/nimbus
+      AGENT_INSECURE_URL: http://agent-insecure:8000
+      AGENT_SECURE_URL: http://agent-secure:8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # The standing-access anti-pattern: a static password, no identity.
+  agent-insecure:
+    build:
+      context: .
+      dockerfile: app/agent/Dockerfile
+    environment:
+      AGENT_MODE: insecure
+      AGENT_NAME: support-agent-insecure
+      DATABASE_HOST: postgres
+      DATABASE_NAME: nimbus
+      STATIC_DB_USER: nimbus_app_legacy
+      STATIC_DB_PASSWORD: LegacyStaticPassword123!
+      AGENT_ENGINE: deterministic
+    ports:
+      - "8001:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # SPIFFE identity + Vault JIT credential. Locally there is no real SPIRE,
+  # so VAULT_AUTH_METHOD=jwt against a hand-minted "fake SVID" -- see
+  # scripts/dev/mint_fake_svid.py and scripts/dev/configure_local_vault.sh.
+  # The real demo uses AGENT_MODE=secure + VAULT_AUTH_METHOD=spiffe (or the
+  # auth/jwt fallback) fed by an actual SPIRE + spiffe-helper sidecar.
+  agent-secure:
+    build:
+      context: .
+      dockerfile: app/agent/Dockerfile
+    environment:
+      AGENT_MODE: secure
+      AGENT_NAME: support-agent-secure
+      DATABASE_HOST: postgres
+      DATABASE_NAME: nimbus
+      VAULT_ADDR: http://vault:8200
+      VAULT_AUTH_METHOD: jwt
+      VAULT_AUTH_MOUNT: jwt
+      VAULT_ROLE: ai-support-agent
+      VAULT_JWT_AUDIENCE: vault
+      VAULT_DB_MOUNT: database
+      VAULT_DB_ROLE: refund-writer
+      SVID_PATH: /svids/jwt_svid.token
+      AGENT_ENGINE: deterministic
+    ports:
+      - "8002:8000"
+    volumes:
+      - ./scripts/dev/svids:/svids:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      vault:
+        condition: service_healthy

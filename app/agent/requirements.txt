@@ -1,0 +1,15 @@
+# Core, always needed -- exercised by the deterministic engine in this
+# sandbox and by both engines at the conference.
+fastapi==0.118.0
+uvicorn[standard]==0.37.0
+psycopg2-binary==2.9.10
+hvac==2.4.0
+pydantic==2.11.7
+
+# Only imported when AGENT_ENGINE=langchain. Pinned to the versions recorded
+# in docs/RUNBOOK.md's research appendix (Oct 2026); re-check before the
+# talk in case of upstream deprecations.
+langchain==1.4.6
+langgraph==1.2.15
+langchain-core==1.6.10
+langchain-anthropic==1.7.6

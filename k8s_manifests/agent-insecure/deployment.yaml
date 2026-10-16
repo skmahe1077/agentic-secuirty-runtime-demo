@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-insecure
+  namespace: nimbus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent-insecure
+  template:
+    metadata:
+      labels:
+        app: agent-insecure
+    spec:
+      containers:
+        - name: agent
+          image: ${IMAGE_REGISTRY}/agent:${IMAGE_TAG}
+          ports:
+            - containerPort: 8000
+          env:
+            - name: AGENT_MODE
+              value: insecure
+            - name: AGENT_NAME
+              value: support-agent-insecure
+            - name: DATABASE_HOST
+              value: "${RDS_ENDPOINT}"
+            - name: DATABASE_NAME
+              value: "${DB_NAME}"
+            - name: STATIC_DB_USER
+              valueFrom:
+                secretKeyRef: { name: db-static-creds, key: username }
+            - name: STATIC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: db-static-creds, key: password }
+            - name: AGENT_ENGINE
+              value: "${AGENT_ENGINE:-deterministic}" # set to `langchain` + ANTHROPIC_API_KEY for the real talk
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef: { name: anthropic-api-key, key: value, optional: true }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            initialDelaySeconds: 3
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 250m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-insecure
+  namespace: nimbus
+spec:
+  selector:
+    app: agent-insecure
+  ports:
+    - port: 8000
+      targetPort: 8000

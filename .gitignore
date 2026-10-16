@@ -1,0 +1,27 @@
+# Terraform
+terraform/.terraform/
+# .terraform.lock.hcl is intentionally NOT ignored -- Terraform's own
+# guidance is to commit it so provider version selection is reproducible.
+terraform/terraform.tfstate
+terraform/terraform.tfstate.*
+terraform/terraform.tfvars
+terraform/*.tfplan
+terraform/spiffe-bundle.jwks
+terraform/spiffe-bundle-keys/
+
+# Local-dev-only key material and fake SVIDs -- never real secrets, but
+# still throwaway/regenerable and shouldn't clutter history.
+scripts/dev/keys/
+scripts/dev/svids/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Env files that might carry real credentials when filled in
+.env
+*.env.local
+
+# OS noise
+.DS_Store

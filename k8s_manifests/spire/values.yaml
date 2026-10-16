@@ -1,0 +1,45 @@
+# Helm values for the `spire` chart from the spiffe/helm-charts-hardened
+# repo. Install `spire-crds` FIRST, then this chart:
+#
+#   helm repo add spiffe https://spiffe.github.io/helm-charts-hardened/
+#   helm upgrade --install --create-namespace -n spire-mgmt spire-crds spire-crds \
+#     --repo https://spiffe.github.io/helm-charts-hardened/
+#   helm upgrade --install -n spire-mgmt spire spire \
+#     --repo https://spiffe.github.io/helm-charts-hardened/ -f values.yaml
+#
+# The chart bundles SPIRE Server, SPIRE Agent, the Controller Manager, the
+# SPIFFE CSI Driver, and the OIDC Discovery Provider. We don't use the OIDC
+# Discovery Provider in this demo -- Vault validates against a static JWKS
+# bundle instead (see docs/RUNBOOK.md on why: it avoids needing HVN<->VPC
+# reachability to an in-cluster endpoint at all) -- but the chart still
+# installs it; it is simply never pointed at by Vault config.
+global:
+  spire:
+    clusterName: agentic-sec-demo
+    trustDomain: nimbus.demo
+    recommendations:
+      enabled: true # wires up k8s_psat node attestor + k8s workload attestor with sane defaults
+    namespaces:
+      create: true
+  openshift: false
+
+spire-server:
+  controllerManager:
+    identities:
+      clusterSPIFFEIDs:
+        # Matches terraform/variables.tf's agent_namespace/agent_service_account
+        # defaults and vault-config.tf's workload_id_patterns /
+        # bound_subject. If you change one, change all three.
+        ai-support-agent-secure:
+          namespaceSelector:
+            matchExpressions:
+              - key: "kubernetes.io/metadata.name"
+                operator: In
+                values: ["agents"]
+          podSelector:
+            matchLabels:
+              app: ai-support-agent-secure
+          # 5 minutes -- SPIRE's own default, left alone deliberately so
+          # the "short-lived credential" story is true by default rather
+          # than tuned to look good on stage.
+          jwtTtl: "300s"

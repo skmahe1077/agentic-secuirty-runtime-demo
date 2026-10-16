@@ -1,53 +1,37 @@
-# Vault-side config for HCP Vault Dedicated, applied through the `vault`
-# provider (see provider block in versions.tf -- operates in the `admin`
-# namespace throughout, per HCP's root-namespace restriction).
+# Vault-side config for the self-managed Vault Enterprise cluster on EKS,
+# applied through the `vault` provider (see versions.tf -- the root
+# namespace is ours now, nothing here runs inside an "admin" namespace).
 #
-# `var.spiffe_auth_available` is NOT guessed -- it is set only after
-# scripts/03-verify.sh's go/no-go probe (`vault auth enable spiffe`) has
-# actually succeeded against this cluster. Default is false, i.e. the
-# auth/jwt fallback, which is what was exercised locally (see "Validated
-# locally" in docs/RUNBOOK.md's planning notes) -- the auth/spiffe branch
-# below follows documented syntax but has NOT been run against a real
-# cluster, since that path needs an Enterprise license HCP may or may not
-# grant on this tier.
-
-# ---- native auth/spiffe path (Enterprise, GA 1.21+) ----------------------
-# No typed `vault_spiffe_auth_backend_*` resource exists in the provider at
-# the time this was written (the method is too new) -- vault_generic_endpoint
-# writes the raw API paths instead, which works regardless of provider
-# version and is the standard escape hatch for just-GA Vault features.
+# auth/spiffe is unconditional: self-managed Vault Enterprise definitely
+# has it (it's GA in 1.21+), so there is no auth/jwt fallback branch and
+# no feature gate here any more.
 
 resource "vault_auth_backend" "spiffe" {
-  count = var.spiffe_auth_available ? 1 : 0
-  type  = "spiffe"
-  path  = "spiffe"
+  type = "spiffe"
+  path = "spiffe"
 
   # The SVID goes in the Authorization header on login, not the JSON body --
-  # Vault must be told to pass it through. (Confirmed against the provider's
-  # actual schema: this lives under the `tune` block, not as a top-level
-  # argument -- `vault auth enable -passthrough-request-headers=...` on the
-  # CLI maps to a tune call under the hood.)
+  # Vault must be told to pass it through. Confirmed against the provider's
+  # schema: this lives under the `tune` block, not as a top-level argument.
   tune {
     passthrough_request_headers = ["Authorization"]
   }
 }
 
 resource "vault_generic_endpoint" "spiffe_config" {
-  count                = var.spiffe_auth_available ? 1 : 0
-  depends_on           = [vault_auth_backend.spiffe]
   path                 = "auth/spiffe/config"
   ignore_absent_fields = true
   data_json = jsonencode({
     trust_domain = var.trust_domain
-    profile      = "static" # see docs/RUNBOOK.md: no network reachability to SPIRE required
+    profile      = "static" # see docs/RUNBOOK.md: no network reachability to SPIRE's OIDC endpoint required
     bundle       = file(var.spiffe_bundle_jwks_path)
-    audience     = "vault"
+    audience     = ["vault"] # array, not a bare string -- an empty list denies all JWT-based SVIDs
   })
+
+  depends_on = [vault_auth_backend.spiffe]
 }
 
 resource "vault_generic_endpoint" "spiffe_role" {
-  count                = var.spiffe_auth_available ? 1 : 0
-  depends_on           = [vault_generic_endpoint.spiffe_config]
   path                 = "auth/spiffe/role/${var.agent_service_account}"
   ignore_absent_fields = true
   data_json = jsonencode({
@@ -56,35 +40,8 @@ resource "vault_generic_endpoint" "spiffe_role" {
     token_policies       = [vault_policy.agent_support.name]
     token_ttl            = "300"
   })
-}
 
-# ---- auth/jwt fallback (Community, the path validated locally) -----------
-
-resource "vault_jwt_auth_backend" "jwt" {
-  count                  = var.spiffe_auth_available ? 0 : 1
-  path                   = "jwt"
-  jwt_validation_pubkeys = var.spiffe_bundle_pem_paths == [] ? null : [for p in var.spiffe_bundle_pem_paths : file(p)]
-}
-
-resource "vault_jwt_auth_backend_role" "agent_secure" {
-  count     = var.spiffe_auth_available ? 0 : 1
-  backend   = vault_jwt_auth_backend.jwt[0].path
-  role_name = "ai-support-agent"
-  role_type = "jwt"
-
-  user_claim      = "sub"
-  bound_audiences = ["vault"]
-  bound_subject   = "spiffe://${var.trust_domain}/ns/${var.agent_namespace}/sa/${var.agent_service_account}"
-
-  # Confirmed locally (see docs/RUNBOOK.md): without this, `auth.metadata`
-  # on the database/creds/* audit entry has no reliable, unmangled SPIFFE
-  # ID -- `auth.display_name` sanitizes `:` and `/` into `-`.
-  claim_mappings = {
-    sub = "spiffe_id"
-  }
-
-  token_policies = [vault_policy.agent_support.name]
-  token_ttl      = 300
+  depends_on = [vault_generic_endpoint.spiffe_config]
 }
 
 # ---- database secrets engine ---------------------------------------------
@@ -105,15 +62,15 @@ resource "vault_database_secret_backend_connection" "nimbus" {
     password       = random_password.db_master.result
   }
 
-  # IMPORTANT: create a break-glass DB admin (see docs/RUNBOOK.md) BEFORE
-  # running the rotate-root step below -- after rotation, this password is
-  # known only to Vault.
+  # IMPORTANT: app/db/04_storefront_role.sql's dedicated nimbus_storefront
+  # account must exist BEFORE running the rotate-root step below -- after
+  # rotation, var.db_master_username's password is known only to Vault.
 }
 
 # Terraform models state, not one-off actions -- root rotation is imperative
 # ("rotate right now") so it is NOT a resource here. Run it explicitly from
 # scripts/02-configure-vault.sh after `terraform apply` and after confirming
-# the break-glass account exists:
+# nimbus_storefront works:
 #   vault write -f database/rotate-root/nimbus-rds
 
 resource "vault_database_secret_backend_role" "refund_writer" {
@@ -168,4 +125,21 @@ resource "vault_policy" "agent_support" {
       capabilities = ["create", "update"]
     }
   EOT
+}
+
+# ---- audit ------------------------------------------------------------------
+# Self-managed Enterprise can do what HCP Vault Dedicated could not: enable
+# a real audit device declaratively. This is NOT a demo step -- the
+# audience never sees this -- it exists so the correlation the storefront's
+# "Audit correlation" panel claims is actually verifiable by the presenter,
+# and so beat 3's claim is literally true rather than merely asserted.
+# Depends on server.auditStorage.enabled = true in vault-cluster.tf's
+# helm_release.vault: Vault fails a request outright if any enabled audit
+# device cannot be written.
+resource "vault_audit" "file" {
+  type = "file"
+  path = "file"
+  options = {
+    file_path = "/vault/audit/vault_audit.log"
+  }
 }

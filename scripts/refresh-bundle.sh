@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# Pulls SPIRE's current JWKS bundle out of the cluster and writes both the
-# forms Vault's two possible auth configs need:
-#   terraform/spiffe-bundle.jwks        -- native auth/spiffe's `bundle` arg
-#   terraform/spiffe-bundle-keys/*.pem  -- auth/jwt's `jwt_validation_pubkeys`
+# Pulls SPIRE's current JWKS bundle out of the cluster and writes both
+# forms Vault needs:
+#   terraform/spiffe-bundle.jwks        -- auth/spiffe's `bundle` arg
+#   terraform/spiffe-bundle-keys/*.pem  -- agentic-iam.tf's OAuth resource
+#                                          server profile's `public_keys`
+#                                          (terraform/locals.tf reads this
+#                                          directory automatically)
 #
 # Run this once during initial provisioning and again if the stack outlives
 # ~24h -- SPIRE's signing keys are bounded by `ca_ttl` (default 24h) and a
 # static bundle goes stale silently past that. See docs/RUNBOOK.md.
 #
-# NOT YET RUN against a real SPIRE server -- `spire-server bundle show` is
-# the documented command, but its exact output shape for `-format spiffe`
-# was not verified live here (no SPIRE deployment in this environment).
-# Sanity-check the first run's output before trusting it on stage.
+# `spire-server bundle show -format spiffe` is the documented command for
+# this; sanity-check the first run's output before trusting it on stage.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
@@ -28,7 +29,7 @@ kubectl -n spire-mgmt exec "$SPIRE_SERVER_POD" -- \
 [ -s "$OUT_JWKS" ] || die "bundle came back empty -- check spire-server is healthy"
 log "wrote $OUT_JWKS"
 
-log "converting JWKS keys to individual PEM files for the auth/jwt fallback"
+log "converting JWKS keys to individual PEM files for agentic-iam.tf's OAuth resource server profile"
 rm -rf "$OUT_KEYS_DIR"; mkdir -p "$OUT_KEYS_DIR"
 python3 - "$OUT_JWKS" "$OUT_KEYS_DIR" <<'PYEOF'
 import json, sys
@@ -49,4 +50,4 @@ for i, jwk in enumerate(jwks.get("keys", [])):
     print(f"wrote {path} (kid={jwk.get('kid', '?')})")
 PYEOF
 
-log "done. terraform/variables.tf's spiffe_bundle_pem_paths should list every file under $OUT_KEYS_DIR"
+log "done. terraform/locals.tf reads every file under $OUT_KEYS_DIR automatically on the next apply."

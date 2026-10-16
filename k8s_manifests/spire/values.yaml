@@ -10,9 +10,13 @@
 # The chart bundles SPIRE Server, SPIRE Agent, the Controller Manager, the
 # SPIFFE CSI Driver, and the OIDC Discovery Provider. We don't use the OIDC
 # Discovery Provider in this demo -- Vault validates against a static JWKS
-# bundle instead (see docs/RUNBOOK.md on why: it avoids needing HVN<->VPC
-# reachability to an in-cluster endpoint at all) -- but the chart still
-# installs it; it is simply never pointed at by Vault config.
+# bundle instead (see docs/RUNBOOK.md: it is already written, already
+# understood, and the stack is torn down daily, so there's little to gain
+# from switching). Vault is now in the same cluster as SPIRE, so
+# `profile = "https_spiffe_bundle"` against an in-cluster Service is a
+# genuinely easy upgrade if the ~24h ca_ttl staleness ever becomes a
+# problem -- but the chart still installs the OIDC provider either way; it
+# is simply never pointed at by Vault config today.
 global:
   spire:
     clusterName: agentic-sec-demo

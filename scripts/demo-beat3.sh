@@ -27,9 +27,8 @@ log "approving as '$APPROVER' (pass a different name as \$1 to use yours)"
 resume "{\"agent\":\"secure\",\"thread_id\":\"beat3\",\"approved_by\":\"$APPROVER\"}" | show
 echo
 
-log "one Vault audit record now carries BOTH the workload identity and the human approval:"
-echo '  grep "database/creds/refund-writer" <audit log> | tail -1'
-echo '  -> auth.metadata = {"approval_id": "...", "approved_by": "'"$APPROVER"'", "spiffe_id": "spiffe://..."}'
+log "the storefront's Identity & Access panel now shows the correlation -- not a log tail"
+echo '  Audit correlation: approved by '"$APPROVER"', workload spiffe://..., credential <lease id>'
 echo
-warn "on HCP: this is a CloudWatch Logs Insights query, pre-saved and pre-run before you go on stage."
-warn "locally: 'docker exec nimbus-demo-vault-1 sh -c \"tail -2 /tmp/vault_audit.log\"' -- see docs/RUNBOOK.md."
+log 'say the line: "the credential is gone in three minutes -- this record is not."'
+warn "Vault's own audit log carries the identical three fields on this request (presenter-only verification, not shown on stage) -- see scripts/03-verify.sh check 5 and docs/RUNBOOK.md."

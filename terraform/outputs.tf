@@ -23,20 +23,30 @@ output "rds_master_password" {
   sensitive = true
 }
 
-output "vault_addr" {
-  value = hcp_vault_cluster.main.vault_public_endpoint_url
+output "vault_k8s_namespace" {
+  value = var.vault_namespace
 }
 
-output "vault_admin_token" {
-  value     = hcp_vault_cluster_admin_token.main.token
-  sensitive = true
+output "vault_replicas" {
+  value = var.vault_replicas
 }
 
-output "hvn_cidr" {
-  description = "Hand this to rds.tf's security group and to any other resource that needs to allow inbound from Vault."
-  value       = var.hvn_cidr
+output "vault_init_secret_name" {
+  value = aws_secretsmanager_secret.vault_init.name
 }
 
-output "spiffe_auth_in_use" {
-  value = var.spiffe_auth_available ? "native auth/spiffe" : "auth/jwt fallback"
+output "vault_unseal_kms_key_arn" {
+  value = aws_kms_key.vault_unseal.arn
+}
+
+# What the agent pods use -- the in-cluster Service, not a public address.
+# Vault deliberately has no ALB/NLB: the storefront is the only thing the
+# audience needs to reach, and a publicly exposed, TLS-disabled Vault on a
+# conference network is a needless risk.
+output "vault_internal_addr" {
+  value = "http://vault.${var.vault_namespace}.svc.cluster.local:8200"
+}
+
+output "vault_portforward_command" {
+  value = "kubectl -n ${var.vault_namespace} port-forward svc/vault 8200:8200"
 }

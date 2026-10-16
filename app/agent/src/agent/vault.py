@@ -81,6 +81,10 @@ class StaticCredentialSession:
                 {"resource": "refunds", "action": "INSERT", "allowed": True},
                 {"resource": "customers", "action": "SELECT", "allowed": True},
             ],
+            # No identity, no approval binding -- beat 1 content, not an
+            # omission: there is nothing for the UI's correlation tile to
+            # show for this credential.
+            "approval": None,
         }
 
     def revoke(self) -> dict | None:
@@ -141,29 +145,19 @@ class VaultSession:
         if self._client is not None and self._client.is_authenticated():
             return self._client
 
-        client = hvac.Client(url=self.settings.vault_addr, namespace=self.settings.vault_namespace)
+        client = hvac.Client(url=self.settings.vault_addr)
         token, _claims = self._read_svid()
         s = self.settings
 
-        if s.vault_auth_method == "spiffe":
-            # auth/spiffe is Enterprise-only and not yet GA on every Vault
-            # tier (see docs/RUNBOOK.md); hvac 2.4.0 has no dedicated helper
-            # for it, so this goes through the low-level adapter. The SVID
-            # goes in the Authorization header, not the JSON body.
-            resp = client.adapter.post(
-                f"/v1/auth/{s.vault_auth_mount}/login",
-                json={"role": s.vault_role, "type": "jwt"},
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            client.token = resp["auth"]["client_token"]
-        else:
-            # Community fallback: plain auth/jwt against SPIRE's OIDC
-            # discovery provider (or a static JWKS bundle). Same request
-            # shape either way from hvac's point of view.
-            resp = client.auth.jwt.jwt_login(
-                role=s.vault_role, jwt=token, path=s.vault_auth_mount
-            )
-            client.token = resp["auth"]["client_token"]
+        # Native auth/spiffe. hvac 2.4.0 has no dedicated helper for it, so
+        # this goes through the low-level adapter -- the SVID goes in the
+        # Authorization header, not the JSON body.
+        resp = client.adapter.post(
+            f"/v1/auth/{s.vault_auth_mount}/login",
+            json={"role": s.vault_role, "type": "jwt"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        client.token = resp["auth"]["client_token"]
 
         self._client = client
         return client
@@ -174,6 +168,7 @@ class VaultSession:
             return self._cached
 
         s = self.settings
+        approval_record = None
         if approval_metadata:
             # Human-approved actions get their own freshly-minted child
             # token carrying the approval as token metadata, so Vault's own
@@ -190,13 +185,14 @@ class VaultSession:
             _token, claims = self._read_svid()
             spiffe_id = claims.get("sub", "")
             meta = {**approval_metadata, "spiffe_id": spiffe_id}
+            approval_record = meta
             token_resp = parent.auth.token.create(
                 policies=[s.vault_role_policy],
                 meta=meta,
                 ttl="5m",
                 display_name=f"approved-{spiffe_id}" if spiffe_id else "approved",
             )
-            client = hvac.Client(url=s.vault_addr, namespace=s.vault_namespace)
+            client = hvac.Client(url=s.vault_addr)
             client.token = token_resp["auth"]["client_token"]
         else:
             client = self._client_logged_in()
@@ -220,6 +216,12 @@ class VaultSession:
                 {"resource": "refunds", "action": "INSERT", "allowed": True},
                 {"resource": "customers", "action": "SELECT", "allowed": False},
             ],
+            # Surfaced so the storefront panel can show approver + workload +
+            # credential together -- this is how the talk now demonstrates
+            # "audit-ready": Vault's own audit log carries the same three
+            # fields (see terraform/vault-config.tf's vault_audit) but is
+            # presenter-only, not shown on stage.
+            "approval": approval_record,
         }
         return self._cached
 

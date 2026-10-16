@@ -8,6 +8,10 @@ metadata:
   name: storefront
   namespace: nimbus
 spec:
+  # Stays 1, not just for cost: app/storefront/main.py's `_panel_log` is
+  # in-process module state. A second replica would serve a different
+  # event history depending on which pod the ALB routed to, and the
+  # Identity & Access panel would flicker between two histories.
   replicas: 1
   selector:
     matchLabels:
@@ -23,8 +27,17 @@ spec:
           ports:
             - containerPort: 8000
           env:
+            # nimbus_storefront, not the RDS master -- see
+            # app/db/04_storefront_role.sql. The master account's password
+            # is rotated out from under everyone but Vault by
+            # scripts/02-configure-vault.sh, so handing it to the public
+            # website would go stale the moment that script runs.
+            - name: STOREFRONT_DB_USER
+              valueFrom: { secretKeyRef: { name: storefront-db-creds, key: username } }
+            - name: STOREFRONT_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: storefront-db-creds, key: password } }
             - name: DATABASE_URL
-              value: "postgresql://${DB_MASTER_USERNAME}:${DB_MASTER_PASSWORD}@${RDS_ENDPOINT}:5432/${DB_NAME}?sslmode=require"
+              value: "postgresql://$(STOREFRONT_DB_USER):$(STOREFRONT_DB_PASSWORD)@${RDS_ENDPOINT}:5432/${DB_NAME}?sslmode=require"
             - name: AGENT_INSECURE_URL
               value: "http://agent-insecure.nimbus.svc.cluster.local:8000"
             - name: AGENT_SECURE_URL
@@ -44,9 +57,9 @@ metadata:
   name: storefront
   namespace: nimbus
 spec:
-  # ClusterIP, not LoadBalancer -- no reason to pay for an ELB for a laptop
-  # demo. Drive it with:
-  #   kubectl -n nimbus port-forward svc/storefront 8000:8000
+  # ClusterIP, not LoadBalancer -- the public entrypoint is the ALB in
+  # ingress.yaml, which targets pod IPs directly (target-type: ip), so
+  # there's no per-Service ELB to pay for.
   selector:
     app: storefront
   ports:

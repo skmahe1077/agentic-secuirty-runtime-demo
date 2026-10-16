@@ -71,8 +71,23 @@
         <ul class="scope-list" id="scope-list"></ul>
       </div>
 
+      <div class="tile hidden" id="tile-correlation">
+        <div class="tile-label">Audit correlation</div>
+        <dl class="corr">
+          <dt>Approved by</dt>  <dd id="corr-approver">—</dd>
+          <dt>Workload</dt>     <dd id="corr-spiffe">—</dd>
+          <dt>Credential</dt>   <dd id="corr-lease">—</dd>
+          <dt>Approval id</dt>  <dd id="corr-approval-id">—</dd>
+          <dt>At</dt>           <dd id="corr-ts">—</dd>
+        </dl>
+      </div>
+
       <div class="tile">
-        <div class="tile-label">Audit log</div>
+        <!-- This is this app's own event feed, not Vault's audit log --
+             that distinction matters now that the real audit log is
+             configured (terraform/vault-config.tf's vault_audit) but
+             deliberately not shown on stage. -->
+        <div class="tile-label">Activity</div>
         <ul class="event-log" id="event-log"></ul>
       </div>
     </aside>

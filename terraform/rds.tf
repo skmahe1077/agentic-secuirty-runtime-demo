@@ -14,19 +14,11 @@ resource "aws_security_group" "rds" {
   vpc_id      = module.vpc.vpc_id
 
   ingress {
-    description     = "from EKS nodes (storefront's own read-only connection)"
+    description     = "from EKS nodes -- covers both the storefront's own connection and Vault's database secrets engine, which now runs in-cluster and egresses the node ENI"
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"
     security_groups = [module.eks.node_security_group_id]
-  }
-
-  ingress {
-    description = "from HCP Vault Dedicated, over the HVN<->VPC peering -- this is the one Vault actually needs for the database secrets engine"
-    from_port   = 5432
-    to_port     = 5432
-    protocol    = "tcp"
-    cidr_blocks = [var.hvn_cidr]
   }
 
   egress {

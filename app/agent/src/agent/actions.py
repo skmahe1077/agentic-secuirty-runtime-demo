@@ -63,6 +63,7 @@ def lookup_order(order_id: int, requester_customer_id: int, session, enforce_own
         "expires_at": creds.get("expires_at"),
         "ttl_seconds": creds.get("ttl_seconds"),
         "scope": creds["scope"],
+        "approval": creds.get("approval"),
         "message": f"issued credential {creds['lease_role']} (lease {creds['lease_id']})",
     })
 
@@ -122,6 +123,7 @@ def issue_refund(
         "expires_at": creds.get("expires_at"),
         "ttl_seconds": creds.get("ttl_seconds"),
         "scope": creds["scope"],
+        "approval": creds.get("approval"),
         "message": (
             f"issued credential {creds['lease_role']} (lease {creds['lease_id']})"
             + (f", child token carries approval {correlation_id}" if approval_metadata else "")
@@ -193,6 +195,7 @@ def lookup_customer_pii(customer_id: int, session, issued_by: str) -> tuple[str,
         "expires_at": creds.get("expires_at"),
         "ttl_seconds": creds.get("ttl_seconds"),
         "scope": creds["scope"],
+        "approval": creds.get("approval"),
         "message": f"issued credential {creds['lease_role']} (lease {creds['lease_id']})",
     })
 

@@ -4,23 +4,24 @@
 # (Terraform models desired state; "rotate the password right now" is an
 # action) -- see the comment in that file.
 #
-# Run AFTER terraform apply and AFTER confirming a break-glass DB admin
-# exists that is NOT the one Vault is about to orphan itself from: this
-# rotates the RDS master password Vault uses for the database secrets
-# engine so that, after this runs, the password is known only to Vault.
+# Run AFTER terraform apply and AFTER app/db/04_storefront_role.sql has
+# been applied against RDS: this rotates the RDS MASTER password, which
+# is the SAME account vault_database_secret_backend_connection.nimbus
+# uses -- there is no separate break-glass admin (see
+# terraform/variables.tf's db_master_username comment). After this runs,
+# only Vault knows that password, so the pre-flight check below verifies
+# the account everything else actually uses instead.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
-export VAULT_ADDR="$(tf_output vault_addr)"
-export VAULT_TOKEN="$(tf_output vault_admin_token)"
-export VAULT_NAMESPACE=admin
+STOREFRONT_DB_PASSWORD="${STOREFRONT_DB_PASSWORD:?set STOREFRONT_DB_PASSWORD -- see app/db/04_storefront_role.sql}"
 
-log "confirming a break-glass DB connection still works before rotating anything"
+vault_env
+
+log "confirming the dedicated storefront DB account works BEFORE rotating the account Vault owns"
 RDS_ENDPOINT="$(tf_output rds_endpoint)"
-DB_MASTER_USERNAME="$(tf_output db_master_username)"
-DB_MASTER_PASSWORD="$(tf_output rds_master_password)"
-PGPASSWORD="$DB_MASTER_PASSWORD" psql -h "$RDS_ENDPOINT" -U "$DB_MASTER_USERNAME" -d nimbus -c "SELECT 1;" >/dev/null \
-  || die "could not reach RDS as the master user -- do not rotate root until this works"
+PGPASSWORD="$STOREFRONT_DB_PASSWORD" psql -h "$RDS_ENDPOINT" -U nimbus_storefront -d nimbus -c "SELECT 1;" >/dev/null \
+  || die "nimbus_storefront cannot reach RDS -- rotating root now would leave nothing but Vault able to log in. Apply app/db/04_storefront_role.sql first."
 
 warn "about to rotate the RDS master password Vault uses -- after this, only Vault knows it."
 warn "Terraform state still has the pre-rotation password; it will drift. That's expected."

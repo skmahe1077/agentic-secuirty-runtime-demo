@@ -15,7 +15,4 @@ data:
     jwt_svids = [
       { jwt_audience = "vault", jwt_svid_file_name = "jwt_svid.token" }
     ]
-    # spiffe-helper#451: a known concurrent-map-write crash exists in
-    # daemon mode with JWT SVIDs on some versions -- pin a version newer
-    # than that fix before relying on this for the talk.
     renew_signal = "SIGUSR1"

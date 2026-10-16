@@ -6,7 +6,8 @@
 // storefront, consumed here):
 //   { type: "identity", spiffe_id, svid_expires_at, ttl_seconds, message }
 //   { type: "credential_issued", lease_id, lease_role, expires_at, ttl_seconds,
-//     scope: [{resource, action, allowed}], message }
+//     scope: [{resource, action, allowed}],
+//     approval: {approval_id, approved_by, spiffe_id} | null, message }
 //   { type: "credential_revoked", lease_id, message }
 //   { type: "denied", resource, message }
 //   { type: "approval_requested", approval_id, amount_pence, message }
@@ -21,6 +22,7 @@ const state = {
   agent: "secure",
   identity: null,       // last identity event
   lease: null,           // last credential_issued event (cleared on revoke/expiry)
+  correlation: null,     // last approved credential's {approved_by, spiffe_id, lease_id, approval_id, ts} -- NOT cleared on revoke, see applyEvents
   pendingApproval: null, // {approval_id, thread_id}
   threadId: "demo",
 };
@@ -167,6 +169,7 @@ $("reset-btn").addEventListener("click", async () => {
   await j("POST", "/api/admin/reset");
   state.lease = null;
   state.identity = null;
+  state.correlation = null;
   $("chat-log").innerHTML = "";
   renderPanel();
   loadOrders();
@@ -180,6 +183,7 @@ $("agent-picker").addEventListener("change", (e) => {
   state.agent = e.target.value;
   state.lease = null;
   state.identity = null;
+  state.correlation = null;
   renderPanel();
 });
 
@@ -189,7 +193,15 @@ function applyEvents(events) {
   for (const e of events) {
     logEvent(e);
     if (e.type === "identity") state.identity = e;
-    if (e.type === "credential_issued") state.lease = e;
+    if (e.type === "credential_issued") {
+      state.lease = e;
+      if (e.approval) {
+        // Deliberately NOT cleared on revoke or expiry below: the
+        // credential is ephemeral, the record of who authorised it is
+        // not. That asymmetry is the "audit-ready" claim this tile makes.
+        state.correlation = { ...e.approval, lease_id: e.lease_id, ts: e.ts || Date.now() / 1000 };
+      }
+    }
     if (e.type === "credential_revoked" && state.lease && state.lease.lease_id === e.lease_id) {
       state.lease = { ...state.lease, revoked: true };
     }
@@ -247,6 +259,28 @@ function renderPanel() {
     $("lease-sub").textContent = "no standing credential held";
     $("lease-meter").style.width = "0%";
     revokeBtn.classList.add("hidden");
+  }
+
+  // correlation tile -- the talk's "audit-ready controls" proof point now
+  // lives here instead of in a Vault audit-log reveal (see
+  // app/agent/src/agent/vault.py's get_db_credentials)
+  const corrTile = $("tile-correlation");
+  if (state.agent === "insecure") {
+    corrTile.classList.remove("hidden");
+    $("corr-approver").textContent = "—";
+    $("corr-spiffe").textContent = "—";
+    $("corr-lease").textContent = "—";
+    $("corr-approval-id").textContent = "—";
+    $("corr-ts").textContent = "no correlation possible -- this credential has no identity and no approval binding";
+  } else if (state.correlation) {
+    corrTile.classList.remove("hidden");
+    $("corr-approver").textContent = state.correlation.approved_by || "—";
+    $("corr-spiffe").textContent = state.correlation.spiffe_id || "—";
+    $("corr-lease").textContent = shortLease(state.correlation.lease_id);
+    $("corr-approval-id").textContent = state.correlation.approval_id || "—";
+    $("corr-ts").textContent = fmtTime(state.correlation.ts);
+  } else {
+    corrTile.classList.add("hidden");
   }
 
   // scope tile
@@ -309,6 +343,12 @@ async function pollState() {
     // Only backfill the log on first load; live updates come from direct responses.
     if ($("event-log").children.length === 0) {
       for (const e of s.log) logEvent(e);
+      const lastApproved = [...s.log].reverse()
+        .find((e) => e.type === "credential_issued" && e.approval);
+      if (lastApproved) {
+        state.correlation = { ...lastApproved.approval, lease_id: lastApproved.lease_id, ts: lastApproved.ts };
+        renderPanel();
+      }
     }
   } catch (_) {
     /* storefront/agents still coming up -- ignore and retry */

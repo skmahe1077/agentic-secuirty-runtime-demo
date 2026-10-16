@@ -3,14 +3,11 @@
 # freshly provisioned stack, and again the morning of the talk.
 #
 # Each check is independent and prints PASS/FAIL rather than stopping at
-# the first failure, because the result of one (spiffe_auth) changes how
-# you'd configure the next run, not just whether this one succeeds.
+# the first failure, so one failure doesn't hide the shape of the others.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
-export VAULT_ADDR="$(tf_output vault_addr)"
-export VAULT_TOKEN="$(tf_output vault_admin_token)"
-export VAULT_NAMESPACE=admin
+vault_env
 
 PASS=0
 FAIL=0
@@ -26,20 +23,18 @@ check() {
   fi
 }
 
-log "1. native auth/spiffe availability (decides terraform's spiffe_auth_available)"
-if vault auth enable spiffe 2>/tmp/verify_check.log; then
-  printf '  \033[1;32mPASS\033[0m  auth/spiffe enabled -- re-run: terraform apply -var=spiffe_auth_available=true\n'
-  vault auth disable spiffe # leave state exactly as terraform expects to manage it
-  PASS=$((PASS+1))
-else
-  printf '  \033[1;33mN/A\033[0m   auth/spiffe unavailable on this cluster/license -- staying on the auth/jwt fallback\n'
-  sed 's/^/        /' /tmp/verify_check.log
-fi
+log "1. self-managed Vault Enterprise is up, unsealed, and licensed"
+check "Enterprise edition" bash -c 'vault status | grep -qi "HashiCorp Vault Enterprise"'
+check "unsealed" bash -c 'vault status -format=json | python3 -c "import sys,json;assert json.load(sys.stdin)[\"sealed\"] is False"'
+check "license not expired" bash -c '
+  exp=$(vault read -format=json sys/license/status | python3 -c "import sys,json;print(json.load(sys.stdin)[\"data\"][\"autoloaded\"][\"expiration_time\"])")
+  python3 -c "import sys,datetime;exp=datetime.datetime.fromisoformat(sys.argv[1].replace(\"Z\",\"+00:00\"));assert exp > datetime.datetime.now(datetime.timezone.utc), f\"license expired at {exp}\"" "$exp"
+'
 
-log "2. header passthrough tuning permitted (sys/auth/*/tune)"
-check "tune jwt auth backend" vault auth tune -passthrough-request-headers=Authorization jwt
+log "2. header passthrough tuning on the spiffe auth mount"
+check "tune spiffe auth backend" vault auth tune -passthrough-request-headers=Authorization spiffe
 
-log "3. database secrets engine round-trips to RDS (proves Vault<->RDS reachability over the HVN peering)"
+log "3. database secrets engine round-trips to RDS (Vault runs on the EKS nodes now, same security group as the storefront)"
 check "mint+revoke refund-writer credential" bash -c '
   set -e
   creds=$(vault read -format=json database/creds/refund-writer)
@@ -47,7 +42,7 @@ check "mint+revoke refund-writer credential" bash -c '
   vault lease revoke "$lease_id"
 '
 
-log "4. sys/leases/revoke usable by the agent-support policy, not just the admin token"
+log "4. sys/leases/revoke usable by the agent-support policy, not just the root token"
 check "revoke permitted under agent-support policy" bash -c '
   set -e
   child=$(vault token create -policy=agent-support -field=token)
@@ -56,9 +51,26 @@ check "revoke permitted under agent-support policy" bash -c '
   VAULT_TOKEN=$child vault write -f sys/leases/revoke lease_id="$lease_id"
 '
 
-log "5. audit log visibility -- NOT automated: sys/audit is blocked on HCP Vault Dedicated"
-warn "enable streaming by hand: HCP Portal -> cluster -> Audit Logs -> Enable log Streaming -> CloudWatch"
-warn "then measure ingestion lag during rehearsal -- see docs/RUNBOOK.md. This script cannot check it."
+log "5. audit device is enabled and actually recording (self-managed Enterprise can do this; HCP Vault Dedicated could not)"
+check "file audit device enabled" bash -c 'vault audit list -detailed -format=json | python3 -c "import sys,json;assert \"file/\" in json.load(sys.stdin)"'
+VAULT_NS="$(tf_output vault_k8s_namespace)"
+check "a request actually lands in the log" bash -c '
+  set -e
+  creds=$(vault read -format=json database/creds/refund-writer)
+  lease_id=$(echo "$creds" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"lease_id\"])")
+  vault lease revoke "$lease_id"
+  kubectl -n "'"$VAULT_NS"'" exec vault-0 -- grep -q "database/creds/refund-writer" /vault/audit/vault_audit.log
+'
+warn "this is presenter-only verification -- the audit log itself is NOT shown on stage; the storefront's Audit correlation tile is the demo-facing proof point."
+
+log "6. end-to-end: the secure agent actually logs in via auth/spiffe"
+check "agent-secure reports a real SPIFFE identity" bash -c '
+  resp=$(kubectl -n agents exec deploy/agent-secure -c agent -- curl -s localhost:8000/status)
+  echo "$resp" | python3 -c "import sys,json;d=json.load(sys.stdin);assert d[\"identity\"] and d[\"identity\"][\"spiffe_id\"], d"
+'
+
+log "7. the public storefront ALB is reachable"
+check "storefront responds" curl -sf -o /dev/null "$STOREFRONT_URL/api/products"
 
 echo
 log "summary: $PASS passed, $FAIL failed"

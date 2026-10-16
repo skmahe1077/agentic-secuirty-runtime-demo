@@ -212,6 +212,11 @@ h2:first-child { margin-top: 0; }
   word-break: break-all;
 }
 .tile-sub { font-size: 0.8rem; color: var(--text-secondary); margin-top: 4px; }
+.tile.hidden { display: none; }
+
+.corr { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 0; font-size: 0.85rem; }
+.corr dt { color: var(--text-muted); }
+.corr dd { margin: 0; font-family: ui-monospace, monospace; word-break: break-all; }
 
 .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
 .status-dot.good     { background: var(--status-good); }

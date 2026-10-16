@@ -7,19 +7,12 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 log "resetting storefront demo state (orders, refunds, event log)"
 curl -s -X POST "$STOREFRONT_URL/api/admin/reset" -H 'content-type: application/json' | python3 -m json.tool
 
-if VAULT_ADDR="$(tf_output vault_addr 2>/dev/null)"; then
-  export VAULT_ADDR
-  export VAULT_TOKEN="$(tf_output vault_admin_token)"
-  export VAULT_NAMESPACE=admin
-  log "revoking any stray database/creds/* leases on the real cluster"
+if terraform -chdir="$TF_DIR" output -raw eks_cluster_name >/dev/null 2>&1; then
+  vault_env
+  log "revoking any stray database/creds/* leases"
   vault lease revoke -prefix database/creds/ || true
 else
-  log "no terraform state found -- assuming the local docker-compose stack"
-  export VAULT_ADDR=http://localhost:8200
-  export VAULT_TOKEN=root
-  vault lease revoke -prefix database/creds/ 2>/dev/null || true
-  log "re-minting the local fake SVID (5 min TTL)"
-  python3 "$REPO_ROOT/scripts/dev/mint_fake_svid.py" --ttl 300
+  log "no terraform state -- local docker-compose stack; there is no Vault here, nothing to revoke"
 fi
 
 # The lease revoke above happens on Vault directly -- the agent processes

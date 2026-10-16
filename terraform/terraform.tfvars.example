@@ -1,14 +1,14 @@
 # Copy to terraform.tfvars and fill in. Never commit the real file --
 # it's already in .gitignore.
 
-aws_region  = "eu-west-1"
-hvn_region  = "eu-west-1"
-name        = "agentic-sec-demo"
+aws_region = "eu-west-1"
+name       = "agentic-sec-demo"
 
-# Tighten this to your current IP (`curl -s ifconfig.me`) right before a
-# rehearsal -- see variables.tf's note on why public_endpoint is on at all.
-vault_ip_allowlist = []
+# Create this out of band BEFORE the first apply:
+#   aws secretsmanager create-secret --name agentic-sec-demo/vault-license \
+#     --secret-string "$(cat vault.hclic)"
+vault_license_secret_name = "agentic-sec-demo/vault-license"
 
-# Leave false until scripts/03-verify.sh's probe has actually confirmed
-# auth/spiffe on your cluster -- see hcp.tf and vault-config.tf.
-spiffe_auth_available = false
+# The storefront ALB is public and /api/admin/reset + /api/admin/revoke are
+# unauthenticated -- narrow this to your current IP right before the talk.
+# alb_inbound_cidrs = ["203.0.113.4/32"]

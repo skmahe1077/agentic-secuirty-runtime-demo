@@ -1,20 +1,13 @@
 #!/usr/bin/env bash
-# Go/no-go probe for Agentic IAM (Agent Registry + OAuth resource server)
-# on the REAL cluster -- same pattern as scripts/03-verify.sh's auth/spiffe
-# probe. Run this against HCP Vault Dedicated before setting
-# `agentic_iam_available=true` in terraform/agentic-iam.tf.
-#
-# This is a separate script, not folded into 03-verify.sh, because it is
-# optional and almost certainly WILL fail without a Vault Enterprise
-# license/entitlement -- see docs/RUNBOOK.md's "Agentic IAM" section.
-# 03-verify.sh's checks are all things this demo needs; this script's
-# checks are a bonus feature this demo can show IF the cluster supports it.
+# Go/no-go + the actual empirical test for Agentic IAM (Agent Registry +
+# OAuth resource server + RAR) against the real, self-managed Vault
+# Enterprise cluster. Unlike the HCP-era version of this script, this is
+# no longer "almost certainly fails" -- a real Enterprise license is
+# installed and terraform/agentic-iam.tf applies unconditionally.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
-export VAULT_ADDR="$(tf_output vault_addr)"
-export VAULT_TOKEN="$(tf_output vault_admin_token)"
-export VAULT_NAMESPACE=admin
+vault_env
 
 PASS=0
 FAIL=0
@@ -34,22 +27,56 @@ log "1. Vault edition and version"
 vault status 2>&1 | grep -iE "Vault Enterprise|version" || true
 echo
 
-log "2. Agent Registry reachable (root-mounted, unnamespaced -- the most likely thing HCP blocks)"
-check "write agent-registry/register" vault write agent-registry/register \
-  display_name="verify-probe-agent" entity_id="$(vault read -field=id identity/entity/name/verify-probe 2>/dev/null || vault write -field=id identity/entity name=verify-probe)"
-check "read it back" vault read agent-registry/registration/display-name/verify-probe
-check "clean up" vault delete agent-registry/registration/display-name/verify-probe
+log "2. Agent Registry -- the registration terraform/agentic-iam.tf created"
+check "read back ai-support-agent-secure's registration" vault read agent-registry/registration/display-name/ai-support-agent-secure
 
-log "3. OAuth resource server config (sys/config/oauth-resource-server/* -- a sys/-level path)"
-check "write a throwaway profile" vault write sys/config/oauth-resource-server/verify-probe \
-  issuer_id="https://verify-probe.example.org" use_jwks=true jwks_uri="https://verify-probe.example.org/.well-known/jwks.json"
-check "clean up" vault delete sys/config/oauth-resource-server/verify-probe
+log "3. OAuth resource server profile -- the 'spire' profile terraform/agentic-iam.tf created"
+check "read back the spire profile" vault read sys/config/oauth-resource-server/spire
+
+echo
+log "4. THE ACTUAL TEST -- does a bare Bearer JWT with authorization_details get honored outside an OBO exchange?"
+log "   this is the single biggest unverified assumption in terraform/agentic-iam.tf -- RECORD the HTTP codes below in docs/RUNBOOK.md"
+
+vault secrets enable -path=kv kv-v2 2>/dev/null || echo "   (kv already enabled)"
+vault kv put kv/test-secret value=hello-from-vault-enterprise >/dev/null
+
+PUB_KEY_PEM="/tmp/rar-probe-keys/rar_probe_key.pub.pem"
+python3 "$REPO_ROOT/scripts/mint_rar_jwt.py" --path kv/data/test-secret --capabilities read \
+  --out /tmp/rar_jwt_ok.token >/dev/null
+vault write sys/config/oauth-resource-server/rar-probe \
+  issuer_id="spiffe://nimbus.demo" use_jwks=false user_claim=sub audiences=vault \
+  public_keys="[{\"key_id\":\"rar-probe-key-0\",\"pem\":\"$(python3 -c "print(open('$PUB_KEY_PEM').read().replace(chr(10), chr(92)+'n'))")\"}]" \
+  optional_authorization_details=false >/dev/null
+
+log "   4a. mint a JWT granting read on kv/data/test-secret, present it directly"
+RAR_JWT_OK="$(cat /tmp/rar_jwt_ok.token)"
+echo "   curl -H \"Authorization: Bearer <jwt>\" $VAULT_ADDR/v1/kv/data/test-secret"
+curl -s -w '\n   HTTP %{http_code}\n' -H "Authorization: Bearer $RAR_JWT_OK" "$VAULT_ADDR/v1/kv/data/test-secret"
+echo
+
+log "   4b. same path, wrong path in the claim -- should fail if RAR is enforced"
+python3 "$REPO_ROOT/scripts/mint_rar_jwt.py" --path kv/data/some-other-secret --capabilities read \
+  --out /tmp/rar_jwt_wrongpath.token >/dev/null
+curl -s -w '\n   HTTP %{http_code}\n' -H "Authorization: Bearer $(cat /tmp/rar_jwt_wrongpath.token)" "$VAULT_ADDR/v1/kv/data/test-secret"
+echo
+
+log "   4c. right path, wrong capability ('create' not 'read') -- should fail if RAR is enforced"
+python3 "$REPO_ROOT/scripts/mint_rar_jwt.py" --path kv/data/test-secret --capabilities create \
+  --out /tmp/rar_jwt_wrongcap.token >/dev/null
+curl -s -w '\n   HTTP %{http_code}\n' -H "Authorization: Bearer $(cat /tmp/rar_jwt_wrongcap.token)" "$VAULT_ADDR/v1/kv/data/test-secret"
+echo
+
+vault delete sys/config/oauth-resource-server/rar-probe >/dev/null 2>&1 || true
+vault kv delete kv/test-secret >/dev/null 2>&1 || true
+
+warn "record what 4a/4b/4c actually returned in docs/RUNBOOK.md -- this was genuinely unknown until this ran."
+warn "if 4a is 200 and 4b/4c are NOT, RAR enforcement on a bare Bearer token is real and the demo can show it live."
+warn "if all three behave identically, that's the answer too -- update terraform/agentic-iam.tf's comments accordingly."
 
 echo
 log "summary: $PASS passed, $FAIL failed"
 if [ "$FAIL" -eq 0 ]; then
-  log "Agentic IAM paths are reachable. Re-apply with: terraform apply -var=agentic_iam_available=true"
+  log "Agentic IAM is confirmed working on this cluster."
 else
-  warn "Agentic IAM is not available on this cluster/entitlement -- stay with agentic_iam_available=false."
-  warn "This does not block the demo: beats 1-3 and scripts/03-verify.sh's checks are all that's required."
+  warn "Agent Registry / OAuth resource server reads failed -- re-check terraform apply output for agentic-iam.tf."
 fi

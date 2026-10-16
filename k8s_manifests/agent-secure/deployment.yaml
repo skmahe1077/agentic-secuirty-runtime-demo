@@ -33,19 +33,12 @@ spec:
               value: "${DB_NAME}"
             - name: VAULT_ADDR
               value: "${VAULT_ADDR}"
-            # Flip to "spiffe" only after scripts/03-verify.sh's probe has
-            # confirmed auth/spiffe is actually enabled on this cluster --
-            # see docs/RUNBOOK.md.
-            - name: VAULT_AUTH_METHOD
-              value: "${VAULT_AUTH_METHOD:-jwt}"
             - name: VAULT_AUTH_MOUNT
-              value: "${VAULT_AUTH_MOUNT:-jwt}"
+              value: spiffe
             - name: VAULT_ROLE
               value: ai-support-agent
             - name: VAULT_ROLE_POLICY
               value: agent-support
-            - name: VAULT_JWT_AUDIENCE
-              value: vault
             - name: VAULT_DB_MOUNT
               value: database
             - name: VAULT_DB_ROLE
@@ -69,7 +62,14 @@ spec:
             limits: { cpu: 250m, memory: 256Mi }
 
         - name: spiffe-helper
-          image: ghcr.io/spiffe/spiffe-helper:latest
+          # Pinned, not :latest. spiffe-helper#451 is a concurrent-map-write
+          # crash in daemon mode with JWT SVIDs -- this exact configuration.
+          # Closed 2026-10-05; v0.12.2 (released 2026-10-09) is the first
+          # tag after the fix. CONFIRM the fix is in v0.12.2's changelog and
+          # the ghcr tag spelling before the talk -- an unpinned sidecar
+          # that writes the SVID is the single highest-consequence pin in
+          # this repo.
+          image: ghcr.io/spiffe/spiffe-helper:0.12.2
           args: ["-config", "/etc/spiffe-helper/helper.conf"]
           volumeMounts:
             - name: spiffe-workload-api

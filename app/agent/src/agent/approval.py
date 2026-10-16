@@ -2,10 +2,11 @@
 approval, and the Vault token metadata that ties the eventual credential
 request back to it.
 
-Token `-metadata` surfaces in the audit entry's `auth.metadata` and needs no
-`sys/config/auditing` access, which HCP Vault Dedicated may not grant -- see
-docs/RUNBOOK.md. Vault also natively recognises `X-Correlation-Id`/
-`Correlation-Id` request headers, used as a second, independent signal.
+Token `meta` surfaces in the audit entry's `auth.metadata` -- this is how the
+storefront's "Audit correlation" tile and Vault's own (presenter-only) audit
+log end up carrying the same three fields; see docs/RUNBOOK.md. Vault also
+natively recognises `X-Correlation-Id`/`Correlation-Id` request headers,
+used as a second, independent signal.
 """
 from __future__ import annotations
 

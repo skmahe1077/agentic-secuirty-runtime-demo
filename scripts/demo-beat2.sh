@@ -28,7 +28,7 @@ kubectl -n agents exec deploy/agent-secure -c agent -- env 2>/dev/null | grep -i
   && die "found a secret in the env -- that should not be there" \
   || echo "  (confirmed: no PASS/SECRET env vars)"
 kubectl -n agents exec deploy/agent-secure -c agent -- cat /svids/jwt_svid.token 2>/dev/null | cut -d. -f2 | base64 -d 2>/dev/null \
-  || warn "(not running on the real cluster -- see scripts/dev/mint_fake_svid.py for the local equivalent)"
+  || warn "(no cluster reachable -- this step is EKS-only, see docs/RUNBOOK.md)"
 echo
 
 log "Alice asks to refund order #1045 -- a fresh, 3-minute credential gets minted for this"

@@ -34,10 +34,7 @@ class Settings:
 
     # secure path: SPIFFE + Vault
     vault_addr: str
-    vault_namespace: str | None
-    vault_auth_method: str  # "spiffe" | "jwt"
     vault_auth_mount: str
-    vault_jwt_audience: str
     vault_role: str
     vault_role_policy: str
     vault_db_mount: str
@@ -49,8 +46,6 @@ class Settings:
     agent_engine: str  # "langchain" | "deterministic"
     anthropic_api_key: str | None
     anthropic_model: str
-
-    http_port: int
 
 
 def load_settings() -> Settings:
@@ -64,11 +59,8 @@ def load_settings() -> Settings:
         static_db_user=os.environ.get("STATIC_DB_USER", "nimbus_app_legacy"),
         static_db_password=os.environ.get("STATIC_DB_PASSWORD", "LegacyStaticPassword123!"),
         static_credential_created_at=os.environ.get("STATIC_CREDENTIAL_CREATED_AT", "2026-08-28"),
-        vault_addr=os.environ.get("VAULT_ADDR", "http://localhost:8200"),
-        vault_namespace=os.environ.get("VAULT_NAMESPACE"),
-        vault_auth_method=os.environ.get("VAULT_AUTH_METHOD", "jwt"),
-        vault_auth_mount=os.environ.get("VAULT_AUTH_MOUNT", "jwt"),
-        vault_jwt_audience=os.environ.get("VAULT_JWT_AUDIENCE", "vault"),
+        vault_addr=os.environ.get("VAULT_ADDR", "http://vault.vault.svc.cluster.local:8200"),
+        vault_auth_mount=os.environ.get("VAULT_AUTH_MOUNT", "spiffe"),
         vault_role=os.environ.get("VAULT_ROLE", "ai-support-agent"),
         vault_role_policy=os.environ.get("VAULT_ROLE_POLICY", "agent-support"),
         vault_db_mount=os.environ.get("VAULT_DB_MOUNT", "database"),
@@ -78,5 +70,4 @@ def load_settings() -> Settings:
         agent_engine=os.environ.get("AGENT_ENGINE", "deterministic"),
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY"),
         anthropic_model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5"),
-        http_port=int(os.environ.get("PORT", "8000")),
     )

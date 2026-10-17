@@ -26,6 +26,69 @@ The demo is **presenter-driven**: the audience watches a live, publicly reachabl
 screen (storefront + chatbot + real refund flow), not a terminal. They do not open the URL
 themselves.
 
+## Architecture
+
+```mermaid
+flowchart TB
+    Audience["🎤 Audience<br/>watches on screen"] --> Browser["Browser"]
+    Browser -->|"HTTPS, IP-allowlisted"| ALB["AWS ALB<br/>internet-facing"]
+
+    subgraph EKS["EKS cluster"]
+        subgraph nsNimbus["namespace: nimbus"]
+            Storefront["storefront (FastAPI)<br/>_resolve() routes 'secure' mode"]
+            AgentInsecure["agent-insecure<br/>static DB password"]
+        end
+
+        subgraph nsAgents["namespace: agents"]
+            OrderAgent["order-agent<br/>SPIFFE identity, read-only"]
+            RefundAgent["refund-agent (agent-secure)<br/>SPIFFE identity, can refund"]
+        end
+
+        subgraph nsSpire["namespace: spire-mgmt"]
+            Spire["SPIRE server + agent"]
+        end
+
+        subgraph nsVault["namespace: vault"]
+            Vault["Vault Enterprise<br/>Raft + AWS KMS auto-unseal"]
+        end
+    end
+
+    RDS[("AWS RDS Postgres<br/>orders · refunds · customers · products")]
+
+    ALB --> Storefront
+    Storefront -->|"agent=insecure"| AgentInsecure
+    Storefront -->|"agent=secure, default"| OrderAgent
+    Storefront -->|"agent=secure, refund wording"| RefundAgent
+
+    Spire -.->|issues SVID| OrderAgent
+    Spire -.->|issues SVID| RefundAgent
+
+    AgentInsecure -->|static password, no scoping| RDS
+    OrderAgent -->|"auth/spiffe login"| Vault
+    RefundAgent -->|"auth/spiffe login"| Vault
+    Vault -->|"mints scoped, TTL'd credential<br/>(order-reader / refund-writer)"| RDS
+```
+
+`order-agent` and `refund-agent` are genuinely separate SPIFFE identities and Vault-scoped DB
+roles -- not one identity with a UI toggle. The storefront decides which one handles a "secure"
+request automatically (least-privilege by default); see "Agentic IAM" below.
+
+## Storefront UI
+
+Two tabs, switched in the topbar:
+
+- **Shop** (default) -- a clean consumer storefront: a product catalog with real photos
+  (`app/storefront/static/images/`, sourced from Wikimedia Commons and bundled locally --
+  nothing hotlinked, so nothing can fail to load on venue Wi-Fi) and a floating **💬 AI
+  Assistant** chat widget, collapsed to a launcher by default. No demo chrome visible -- a real
+  shopper never sees a customer picker or a security panel.
+- **Security Flow** -- the presenter/demo view: the "Shopping as" and "Support agent" controls
+  (switch customer, switch insecure/secure mode) plus the live 6-stage Security Flow panel
+  (Identity → Auth → Credential → Approval → Execute → Revoke) and the Activity log.
+
+The chat widget talks to whichever backend `app/storefront/main.py`'s `_resolve()` routes to --
+see "Agentic IAM" below for what that means once two agents exist.
+
 ## The real thing: AWS EKS + self-managed Vault Enterprise + SPIRE
 
 **Prerequisites:**
@@ -86,12 +149,12 @@ delegation (a different, human-approval-linking piece) isn't attempted at all.
 
 | Path | What's there |
 |---|---|
-| `app/storefront/` | FastAPI storefront: catalog, orders, support chat, the live Security Flow panel |
+| `app/storefront/` | FastAPI storefront: Shop/Security Flow tabs, catalog with local product photos, floating AI Assistant chat widget, the live Security Flow panel |
 | `app/agent/` | The support agent, as one image running in two modes (`AGENT_MODE=insecure\|secure`) |
 | `app/db/` | Schema + seed data + the deliberately-bad `nimbus_app_legacy` role + the storefront's own least-privilege role |
 | `terraform/` | AWS (VPC/EKS/RDS/KMS) + self-managed Vault Enterprise (vault-helm) + AWS Load Balancer Controller + Vault config + Agentic IAM |
 | `k8s_manifests/` | SPIRE Helm values, storefront/agent Deployments (`agent-insecure`, `agent-secure` = refund-agent, `order-agent`), the public storefront Ingress |
-| `scripts/` | Provisioning, Vault init, the go/no-go gates, the three demo beats, reset, teardown |
+| `scripts/` | Provisioning, Vault init, the go/no-go gates, the four demo beats, reset, teardown |
 | `docs/RUNBOOK.md` | Provisioning order, self-managed-Vault constraints, confirmed gotchas, cost |
 | `docs/TALK-NOTES.md` | The four-beat narrative script, stagecraft notes, prior art to cite |
 

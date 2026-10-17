@@ -78,22 +78,26 @@ request automatically (least-privilege by default); see "Agentic IAM" below.
 
 Two tabs, switched in the topbar:
 
-- **Shop** (default) -- a clean consumer storefront: a product catalog with real photos
+- **Shop** (default) -- a clean consumer storefront: a 14-item product catalog with real photos
   (`app/storefront/static/images/`, sourced from Wikimedia Commons and bundled locally --
-  nothing hotlinked, so nothing can fail to load on venue Wi-Fi) and a floating **💬 AI
-  Assistant** chat widget (with its own "Chatting as" customer picker, kept in sync with the
-  Control Room tab's), collapsed to a launcher by default. Clicking a suggestion chip
-  ("Request a refund" / "Check my order status") without an order number asks for one via a
-  real follow-up turn, not a canned error. No other demo chrome visible -- a real shopper never
-  sees a security panel.
+  nothing hotlinked, so nothing can fail to load on venue Wi-Fi), including four Apple-branded
+  items (iPhone 18 Pro, MacBook Air, AirPods Pro, Apple Watch -- demo catalog labels, not
+  verified real current products; see `images/ATTRIBUTION.md`). A floating **💬 AI Assistant**
+  chat widget (with its own "Chatting as" customer picker and "Support agent" mode picker, both
+  kept in sync with the Control Room tab's) is collapsed to a launcher by default. Clicking a
+  suggestion chip ("Request a refund" / "Check my order status") without an order number asks
+  for one via a real follow-up turn, not a canned error. No other demo chrome visible -- a real
+  shopper never sees a security panel.
 - **Control Room** -- the presenter/demo view: the "Shopping as" and "Support agent" controls
-  (switch customer, switch insecure/secure mode) plus a live, dark stage-column diagram
-  (Identity → Authenticate → Approval → Credential → Execute). Identity shows **both**
-  registered agents (`order-agent`, `refund-agent`) at once -- kept live via `/api/state`
-  polling, not just whichever handled the last turn -- each tagged with its real Agent Registry
-  ceiling policy. Real SVG connector lines link every card to the next (both agents converge
-  into Authenticate), a dashed bypass arc appears when a refund skips Approval (under the £100
-  threshold), and a dark terminal-style event stream replaces the old Activity log.
+  (switch customer, switch insecure/secure mode), an **Order History** table (who ordered what,
+  with the order number -- reuses `/api/orders`, for picking a valid customer/order combo live),
+  and a live, dark stage-column diagram (Identity → Authenticate → Approval → Credential →
+  Execute). Identity shows **both** registered agents (`order-agent`, `refund-agent`) at once --
+  kept live via `/api/state` polling, not just whichever handled the last turn -- each tagged
+  with its real Agent Registry ceiling policy. Real SVG connector lines link every card to the
+  next (both agents converge into Authenticate), a dashed bypass arc appears when a refund skips
+  Approval (under the £100 threshold), and a dark terminal-style event stream replaces the old
+  Activity log.
 
 The chat widget talks to whichever backend `app/storefront/main.py`'s `_resolve()` routes to --
 see "Agentic IAM" below for what that means once two agents exist.
@@ -145,20 +149,25 @@ bash scripts/04-verify-agentic-iam.sh
 ```
 
 That script confirms both Agent Registry registrations and the OAuth resource server path are
-reachable, then runs two real experiments: presents a bare Bearer JWT carrying
-`authorization_details` directly to a KV path, with two deliberately-wrong variants (wrong
-path, wrong capability), to find out empirically whether RAR is enforced outside a real
-OAuth/OBO exchange; and deliberately widens `order-agent`'s real policy to see whether the
-Agent Registry ceiling caps a normal token independent of RAR/OBO -- neither is something
-HashiCorp's docs confirm either way. See `docs/RUNBOOK.md`'s "Agentic IAM" section for what's
-confirmed, and why real on-behalf-of
+reachable, then runs two real experiments -- both now empirically answered on a real cluster,
+not open questions:
+
+- A bare Bearer JWT carrying `authorization_details`, presented directly to a KV path outside
+  any real OAuth/OBO exchange, is refused identically (HTTP 403) whether its claimed
+  path/capability are right or wrong. RAR isn't enforced on this path without a real OBO flow.
+- Deliberately widening `order-agent`'s real ACL policy to also grant `refund-writer` read
+  access, then asking for it with a normal `auth/spiffe`-issued token (not a bare Bearer JWT),
+  **succeeds** -- the Agent Registry ceiling did not block it. The ceiling constrains an
+  OBO/RAR-delegated request, not an agent's own ordinary token.
+
+See `docs/RUNBOOK.md`'s "Agentic IAM" section for the full detail, and why real on-behalf-of
 delegation (a different, human-approval-linking piece) isn't attempted at all.
 
 ## Layout
 
 | Path | What's there |
 |---|---|
-| `app/storefront/` | FastAPI storefront: Shop/Control Room tabs, catalog with local product photos, floating AI Assistant chat widget, the live Control Room panel |
+| `app/storefront/` | FastAPI storefront: Shop/Control Room tabs, catalog with local product photos, floating AI Assistant chat widget, the live Control Room panel + order history |
 | `app/agent/` | The support agent, as one image running in two modes (`AGENT_MODE=insecure\|secure`) |
 | `app/db/` | Schema + seed data + the deliberately-bad `nimbus_app_legacy` role + the storefront's own least-privilege role |
 | `terraform/` | AWS (VPC/EKS/RDS/KMS) + self-managed Vault Enterprise (vault-helm) + AWS Load Balancer Controller + Vault config + Agentic IAM |

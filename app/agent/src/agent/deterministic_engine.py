@@ -16,9 +16,32 @@ from config import Settings
 from engine_base import AgentTurnResult
 
 _REFUND_RE = re.compile(r"refund.*?#?\s*(\d{3,6})", re.IGNORECASE)
-_ORDER_RE = re.compile(r"(?:order|status|look ?up|where is|find).*?#?\s*(\d{3,6})", re.IGNORECASE)
+_ORDER_RE = re.compile(
+    r"(?:order|status|look ?up|where is|find|track(?:ing)?|when will|has.*shipped)"
+    r".*?#?\s*(\d{3,6})",
+    re.IGNORECASE,
+)
 _CUSTOMER_RE = re.compile(r"customer\s*#?\s*(\d{1,6})", re.IGNORECASE)
 _PII_HINT_RE = re.compile(r"phone|email|contact|address|pii", re.IGNORECASE)
+
+_GREETING_RE = re.compile(r"^\s*(?:hi|hello|hey|good (?:morning|afternoon|evening))\b", re.IGNORECASE)
+_THANKS_RE = re.compile(r"\b(?:thanks|thank you|cheers|appreciate it)\b", re.IGNORECASE)
+_FAREWELL_RE = re.compile(r"^\s*(?:bye|goodbye|see ya|that'?s all|that is all)\b", re.IGNORECASE)
+_HELP_RE = re.compile(r"\b(?:help|what can you do|how does this work)\b", re.IGNORECASE)
+
+_GREETING_REPLY = (
+    "Hi, I'm the Mahi Stores support agent -- I can check an order's status "
+    "(\"where's order #1042\") or process a refund (\"refund order #1042\")."
+)
+_HELP_REPLY = (
+    "I can look up an order's status (\"track order #1042\"), or process a refund "
+    "(\"refund order #1042\"). Browsing the catalog itself happens on the page -- "
+    "I handle anything to do with an order you've already placed."
+)
+_FALLBACK_REPLY = (
+    "I didn't catch an order number in that. Try \"status of order #1042\" or "
+    "\"refund order #1042\" -- or just say hi!"
+)
 
 
 class DeterministicEngine:
@@ -43,10 +66,20 @@ class DeterministicEngine:
             reply, events = actions.lookup_order(int(m.group(1)), customer_id, self.session, self.enforce_ownership)
             return AgentTurnResult(reply=reply, events=events)
 
-        return AgentTurnResult(
-            reply="I can look up an order (\"status of order #1042\") or process a refund (\"refund order #1042\").",
-            events=[],
-        )
+        # Small talk -- none of these touch the database or Vault, so they
+        # carry no credential/identity events; checked last so a greeting
+        # that also mentions an order number ("hi, can you refund #1042?")
+        # still triggers the real action above instead of a pleasantry.
+        if _GREETING_RE.search(message):
+            return AgentTurnResult(reply=_GREETING_REPLY, events=[])
+        if _FAREWELL_RE.search(message):
+            return AgentTurnResult(reply="Take care -- come back any time you need an order looked into.", events=[])
+        if _THANKS_RE.search(message):
+            return AgentTurnResult(reply="You're welcome -- anything else I can look into?", events=[])
+        if _HELP_RE.search(message):
+            return AgentTurnResult(reply=_HELP_REPLY, events=[])
+
+        return AgentTurnResult(reply=_FALLBACK_REPLY, events=[])
 
     def _start_refund(self, order_id: int, message: str, customer_id: int, thread_id: str) -> AgentTurnResult:
         try:

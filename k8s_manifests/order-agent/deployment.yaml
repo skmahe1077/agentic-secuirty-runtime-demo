@@ -1,0 +1,112 @@
+# order-agent: the read-only counterpart to agent-secure (refund-agent).
+# Same image, same spiffe-helper sidecar pattern -- see
+# k8s_manifests/agent-secure/deployment.yaml. Differs only in identity
+# (ServiceAccount, app label, ClusterSPIFFEID) and the Vault role it's
+# allowed to request (order-reader, not refund-writer -- see
+# terraform/vault-config.tf). The storefront routes to this Service
+# automatically; the customer never picks it -- see
+# app/storefront/main.py's _resolve().
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-agent
+  namespace: agents
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-order-agent
+  template:
+    metadata:
+      # app label is load-bearing: SPIRE's ClusterSPIFFEID podSelector
+      # matches on it. Renaming it breaks identity issuance, not just
+      # scheduling.
+      labels:
+        app: ai-order-agent
+    spec:
+      serviceAccountName: ai-order-agent
+      containers:
+        - name: agent
+          image: ${IMAGE_REGISTRY}/agent:${IMAGE_TAG}
+          ports:
+            - containerPort: 8000
+          env:
+            - name: AGENT_MODE
+              value: secure
+            - name: AGENT_NAME
+              value: order-agent
+            - name: DATABASE_HOST
+              value: "${RDS_ENDPOINT}"
+            - name: DATABASE_NAME
+              value: "${DB_NAME}"
+            - name: VAULT_ADDR
+              value: "${VAULT_ADDR}"
+            - name: VAULT_AUTH_MOUNT
+              value: spiffe
+            - name: VAULT_ROLE
+              value: ai-order-agent
+            - name: VAULT_ROLE_POLICY
+              value: order-agent-policy
+            - name: VAULT_DB_MOUNT
+              value: database
+            - name: VAULT_DB_ROLE
+              value: order-reader
+            - name: SVID_PATH
+              value: /svids/jwt_svid.token
+            - name: AGENT_ENGINE
+              value: "${AGENT_ENGINE:-deterministic}"
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef: { name: anthropic-api-key, key: value, optional: true }
+          volumeMounts:
+            - name: svids
+              mountPath: /svids
+              readOnly: true
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            initialDelaySeconds: 3
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 250m, memory: 256Mi }
+
+        - name: spiffe-helper
+          # Pinned, not :latest -- see agent-secure/deployment.yaml's
+          # comment on spiffe-helper#451. Keep this tag in sync with that
+          # one if it's ever bumped.
+          image: ghcr.io/spiffe/spiffe-helper:0.12.2
+          args: ["-config", "/etc/spiffe-helper/helper.conf"]
+          volumeMounts:
+            - name: spiffe-workload-api
+              mountPath: /spiffe-workload-api
+              readOnly: true
+            - name: svids
+              mountPath: /svids
+            - name: helper-config
+              mountPath: /etc/spiffe-helper
+              readOnly: true
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+
+      volumes:
+        - name: spiffe-workload-api
+          csi:
+            driver: csi.spiffe.io
+            readOnly: true
+        - name: svids
+          emptyDir: {}
+        - name: helper-config
+          configMap:
+            name: spiffe-helper-config-order-agent
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-agent
+  namespace: agents
+spec:
+  selector:
+    app: ai-order-agent
+  ports:
+    - port: 8000
+      targetPort: 8000

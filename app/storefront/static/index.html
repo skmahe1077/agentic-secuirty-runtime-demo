@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Nimbus Store</title>
+<title>Mahi Stores</title>
 <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
   <header class="topbar">
-    <div class="wordmark">☁ Nimbus Store</div>
+    <div class="wordmark">☁ Mahi Stores</div>
     <div class="topbar-controls">
       <label class="field-inline">
         Shopping as
@@ -34,7 +34,15 @@
       <div id="orders" class="order-list"></div>
 
       <h2>Support</h2>
+      <div class="chat-header">
+        <span class="chat-avatar">💬</span>
+        <div>
+          <div class="chat-title">Mahi Stores Assistant</div>
+          <div class="chat-status"><span class="status-dot good"></span>Online</div>
+        </div>
+      </div>
       <div id="chat-log" class="chat-log"></div>
+      <div id="chat-suggestions" class="chat-suggestions"></div>
       <form id="chat-form" class="chat-form">
         <input id="chat-input" type="text" placeholder="e.g. Please refund order #1042" autocomplete="off" />
         <button type="submit">Send</button>
@@ -50,36 +58,31 @@
     </section>
 
     <aside class="panel">
-      <h2>Identity &amp; Access</h2>
+      <h2>Security Flow</h2>
 
-      <div class="tile" id="tile-identity">
-        <div class="tile-label">Workload identity</div>
-        <div class="tile-value" id="identity-value">—</div>
-        <div class="tile-sub" id="identity-sub"></div>
-      </div>
+      <!-- Stage boxes are rendered entirely by app.js's STAGES config +
+           renderFlow() -- their content (what/why/tags) lives in one place
+           in the JS, not duplicated here. -->
+      <div class="flow" id="flow"></div>
 
-      <div class="tile" id="tile-lease">
-        <div class="tile-label">Vault credential</div>
-        <div class="tile-value" id="lease-value">—</div>
-        <div class="meter"><div class="meter-fill" id="lease-meter"></div></div>
-        <div class="tile-sub" id="lease-sub"></div>
-        <button id="revoke-btn" class="btn-danger hidden">⨯ Revoke now</button>
-      </div>
-
-      <div class="tile" id="tile-scope">
-        <div class="tile-label">Scope</div>
-        <ul class="scope-list" id="scope-list"></ul>
-      </div>
-
-      <div class="tile hidden" id="tile-correlation">
-        <div class="tile-label">Audit correlation</div>
-        <dl class="corr">
+      <div class="stage-detail hidden" id="stage-detail">
+        <button class="stage-detail-close" id="stage-detail-close" title="Close">×</button>
+        <div class="stage-detail-label" id="stage-detail-label"></div>
+        <div class="stage-detail-heading">What happens</div>
+        <div class="stage-detail-body" id="stage-detail-what"></div>
+        <div class="stage-detail-heading">Why it matters</div>
+        <div class="stage-detail-body" id="stage-detail-why"></div>
+        <div class="stage-detail-tags" id="stage-detail-tags"></div>
+        <div class="stage-detail-live hidden" id="stage-detail-live"></div>
+        <dl class="corr hidden" id="stage-detail-correlation">
           <dt>Approved by</dt>  <dd id="corr-approver">—</dd>
           <dt>Workload</dt>     <dd id="corr-spiffe">—</dd>
           <dt>Credential</dt>   <dd id="corr-lease">—</dd>
-          <dt>Approval id</dt>  <dd id="corr-approval-id">—</dd>
-          <dt>At</dt>           <dd id="corr-ts">—</dd>
         </dl>
+        <div class="meter hidden" id="stage-detail-meter-wrap"><div class="meter-fill" id="lease-meter"></div></div>
+        <div class="stage-detail-heading">This run</div>
+        <ul class="stage-detail-log" id="stage-detail-log"></ul>
+        <button id="revoke-btn" class="btn-danger hidden">⨯ Revoke now</button>
       </div>
 
       <div class="tile">

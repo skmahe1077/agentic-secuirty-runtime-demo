@@ -101,13 +101,13 @@ against the self-managed cluster -- treat as warnings if you ever touch the rele
 - **Vault token `display_name` sanitizes `:` and `/` into `-`.** A SPIFFE ID in
   `display_name` renders as `spiffe---nimbus-demo-ns-...` -- recognizable, not exact. Use
   `auth.metadata` for anything that needs to be literal (a slide, a query result, the
-  storefront's Audit correlation tile).
+  storefront's Security Flow panel's Approval stage).
 - **A human-approved action's child token (`auth/token/create`) does not inherit the parent's
   identity.** Without deliberately copying `spiffe_id` into the child's `meta` and setting its
   `display_name` (see `vault.py`'s `VaultSession.get_db_credentials`), the audit entry for an
   approved refund shows only the approval fields and a generic "token-token" -- losing the
-  "which workload" half of beat 3's claim, and leaving the storefront's correlation tile with
-  nothing to show.
+  "which workload" half of beat 3's claim, and leaving the Security Flow panel's Approval
+  stage with nothing to correlate.
 - **An agent's in-memory credential cache does not know about out-of-band revocations.**
   `scripts/reset.sh` calls `vault lease revoke -prefix database/creds/` directly; without also
   calling the agent's `/vault/forget` (wired to `scripts/reset.sh` via the storefront's
@@ -126,9 +126,27 @@ against the self-managed cluster -- treat as warnings if you ever touch the rele
 
 HashiCorp's **Agentic IAM** (Agent Registry, Vault as an OAuth resource server, RFC 9396 Rich
 Authorization Requests) is GA in Vault Enterprise 2.1 (2026-09-01) -- this repo's name echoes
-it. `terraform/agentic-iam.tf` registers the secure agent and enforces a per-request RAR
-constraint, and now applies **unconditionally** -- a real trial license is installed on a real,
-self-managed cluster, so there's no feature gate left.
+it. `terraform/agentic-iam.tf` registers **two** agents, not one:
+
+- **`refund-agent`** -- the existing `ai-support-agent-secure` identity, unchanged. Can look up
+  orders and issue refunds (Vault role `refund-writer`).
+- **`order-agent`** -- a genuinely separate SPIFFE identity (`k8s_manifests/order-agent/`,
+  own ServiceAccount, own `ClusterSPIFFEID`), Vault-scoped to the read-only `order-reader` DB
+  role (`terraform/vault-config.tf`). Cannot issue refunds -- not because of an if-statement,
+  but because its PostgreSQL role has no `INSERT` grant on `refunds`. Asking it for a refund
+  gets a clean `denied` event (`app/agent/src/agent/actions.py`'s `issue_refund`), the same
+  proven mechanism as the `customers`-table denial.
+
+Each has its own ceiling policy (`agent-ceiling` / `order-agent-ceiling`), and both apply
+**unconditionally** -- a real trial license is installed on a real, self-managed cluster, so
+there's no feature gate left.
+
+**The customer never picks between them.** `app/storefront/main.py`'s `_resolve()` dispatches
+"secure" mode to `order-agent` by default (least privilege -- don't hand out refund capability
+unless the task needs it) and escalates to `refund-agent` only when the message asks for a
+refund. This is a UX convenience, not the security boundary: a mis-routed refund request to
+`order-agent` still can't succeed, because Vault/PostgreSQL enforce the real boundary
+regardless of what the router guessed.
 
 What's still deliberately **not** attempted: real on-behalf-of (OBO) human delegation. That
 needs `actor_claim` on the OAuth resource server profile, which the Terraform provider
@@ -158,6 +176,26 @@ If 4a succeeds and 4b/4c do not, RAR enforcement on a bare Bearer token outside 
 exchange is real, and beat 4 can show it live. If all three behave identically, that's the
 answer too -- update `terraform/agentic-iam.tf`'s comments and `docs/TALK-NOTES.md`'s beat 4
 accordingly rather than leaving this section a hypothesis.
+
+**The second, newer question**, now that two agents with two different ceilings exist: does
+the Agent Registry ceiling cap anything on a **normal** `auth/spiffe`-issued token,
+independent of RAR/OBO entirely? Before `order-agent` existed, the one ceiling policy was
+always identical in scope to the one agent's real policy -- nothing for it to visibly clip.
+`scripts/04-verify-agentic-iam.sh`'s step 5 deliberately widens `order-agent-policy` to also
+grant `database/creds/refund-writer` (a plausible operator mistake), then asks `order-agent`'s
+own token -- not a bare Bearer JWT, a real `vault login`-shaped token -- to read it. **Record
+the actual result here once the script has run:**
+
+```
+5. order-agent's own token, with its real policy widened to allow refund-writer:
+   vault read database/creds/refund-writer -> SUCCEEDED / BLOCKED (circle one)
+```
+
+If it **succeeded**, that matches the docs' own framing -- ceiling enforcement presumes an OBO
+flow, and a plain token request isn't one. Not a surprise, but now confirmed by this repo's own
+test rather than assumed from HashiCorp's docs. If it was **blocked**, that's genuinely new
+information: the ceiling is enforcing something independent of RAR/OBO, and
+`terraform/agentic-iam.tf`'s header comment should be corrected to say so.
 
 ## Self-managed constraints that shape this build
 
@@ -227,25 +265,32 @@ it elapses -- that's expected, not a leak.
    tuned, database engine round-trips, `sys/leases/revoke` works under `agent-support`, the
    audit device is enabled and actually recording, the agent's end-to-end login succeeds, the
    public ALB responds).
-2. `scripts/04-verify-agentic-iam.sh` passes and the 4a/4b/4c HTTP codes above are filled in.
+2. `scripts/04-verify-agentic-iam.sh` passes, the 4a/4b/4c HTTP codes above are filled in, and
+   the misconfiguration ceiling test's result is recorded.
 3. `vault read database/creds/refund-writer` by hand returns a credential; it can `SELECT`
    `orders` and `INSERT` into `refunds`, and is refused on `customers`; `vault lease revoke`
-   kills it and removes the role from `pg_roles`.
-4. `kubectl exec` into `agent-secure` shows no secret material beyond the SVID file, and the
-   decoded SVID's `sub` matches the SPIRE `ClusterSPIFFEID`'s template.
-5. **Negative test**: run the agent from a different service account (or delete the
+   kills it and removes the role from `pg_roles`. `vault read database/creds/order-reader` by
+   hand returns a credential that can `SELECT` `orders`/`products` and is refused on
+   `refunds`/`customers`.
+4. `kubectl exec` into `agent-secure` **and** `order-agent` both show no secret material beyond
+   the SVID file, and each decoded SVID's `sub` matches its own `ClusterSPIFFEID` template --
+   `.../sa/ai-support-agent-secure` and `.../sa/ai-order-agent` respectively.
+5. **Negative test**: run the agent from a different service account (or delete a
    `ClusterSPIFFEID`) and confirm `auth/spiffe/login` is refused -- proves identity is
-   enforced, not decorative.
+   enforced, not decorative. **Second negative test**: ask `order-agent` directly for a refund
+   (`scripts/demo-beat4-agentic-iam.sh`'s last step) and confirm a clean `denied` event, not a
+   500 -- proves the InsufficientPrivilege catch in `actions.py`'s `issue_refund` actually
+   fires.
 6. On the ALB URL: refund an order through the chatbot as an approved action, and confirm the
-   storefront's **Audit correlation** tile shows the approver, SPIFFE ID, and lease ID
-   together -- and that it persists after a subsequent revoke (the credential is ephemeral,
-   the record of who authorized it is not).
+   Security Flow panel's **Approval** stage shows the approver, SPIFFE ID, and lease ID
+   together -- and that it persists after a subsequent revoke of the Credential stage (the
+   credential is ephemeral, the record of who authorized it is not).
 7. Confirm the ALB security-group allowlist works in both directions: the site loads from the
    presenter's IP and is refused from anywhere else.
 8. `kubectl -n vault delete pod vault-0`: it comes back, auto-unseals via KMS with no human
    input, and the agent's next request succeeds (its cached client re-authenticates).
-9. `scripts/demo-beat{1,2,3}.sh` run clean back to back, twice in a row, with
-   `scripts/reset.sh` between runs.
+9. `scripts/demo-beat{1,2,3}.sh` and `scripts/demo-beat4-agentic-iam.sh` run clean back to
+   back, twice in a row, with `scripts/reset.sh` between runs.
 10. `scripts/record-demo.sh` produces the fallback video, with the browser window as the
     primary frame, not the terminal.
 11. `scripts/destroy.sh` leaves nothing billable -- explicitly including no orphaned ALB,

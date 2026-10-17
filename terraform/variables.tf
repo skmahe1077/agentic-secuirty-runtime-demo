@@ -59,8 +59,15 @@ variable "agent_namespace" {
 }
 
 variable "agent_service_account" {
-  type    = string
-  default = "ai-support-agent-secure"
+  description = "The refund-agent's SPIFFE service account -- can look up orders AND issue refunds (Vault role refund-writer)."
+  type        = string
+  default     = "ai-support-agent-secure"
+}
+
+variable "order_agent_service_account" {
+  description = "The order-agent's SPIFFE service account -- read-only (Vault role order-reader), cannot issue refunds. A genuinely separate SPIFFE identity, not a UI-level restriction -- see terraform/agentic-iam.tf."
+  type        = string
+  default     = "ai-order-agent"
 }
 
 variable "spiffe_bundle_jwks_path" {

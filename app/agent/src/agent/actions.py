@@ -56,6 +56,9 @@ def lookup_order(order_id: int, requester_customer_id: int, session, enforce_own
         events.append({"type": "error", "message": f"could not obtain a database credential: {exc}"})
         return "I couldn't reach the order database right now.", events
 
+    auth = session.auth_event()
+    if auth:
+        events.append(auth)
     events.append({
         "type": "credential_issued",
         "lease_id": creds["lease_id"],
@@ -116,6 +119,9 @@ def issue_refund(
         events.append({"type": "error", "message": f"could not obtain a database credential: {exc}"})
         return "I couldn't reach the order database right now.", events
 
+    auth = session.auth_event()
+    if auth:
+        events.append(auth)
     events.append({
         "type": "credential_issued",
         "lease_id": creds["lease_id"],
@@ -152,16 +158,30 @@ def issue_refund(
         if row["status"] == "refunded":
             return f"Order #{order_id} was already refunded.", events
 
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO refunds (order_id, amount_pence, reason, issued_by, approved_by, correlation_id)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                """,
-                (order_id, row["total_pence"], reason, issued_by, approved_by, correlation_id),
-            )
-            cur.execute("UPDATE orders SET status = 'refunded' WHERE order_id = %s", (order_id,))
-        conn.commit()
+        # Catches a read-only role (order-agent's `order-reader`, which has
+        # no INSERT/UPDATE grant anywhere) trying to refund. Same pattern as
+        # lookup_customer_pii's InsufficientPrivilege catch below -- the
+        # database refuses it, not an if-statement, so a mis-routed refund
+        # request fails cleanly instead of 500ing. See docs/RUNBOOK.md.
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO refunds (order_id, amount_pence, reason, issued_by, approved_by, correlation_id)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (order_id, row["total_pence"], reason, issued_by, approved_by, correlation_id),
+                )
+                cur.execute("UPDATE orders SET status = 'refunded' WHERE order_id = %s", (order_id,))
+            conn.commit()
+        except psycopg2.errors.InsufficientPrivilege:
+            conn.rollback()
+            events.append({
+                "type": "denied",
+                "resource": "refunds",
+                "message": f"{issued_by}'s database role has no grant to write refunds -- PostgreSQL refused the query",
+            })
+            return "I'm not able to process refunds -- that's outside what I'm allowed to do. I can look up the order status for you instead.", events
 
     events.append({
         "type": "refund_issued",
@@ -188,6 +208,9 @@ def lookup_customer_pii(customer_id: int, session, issued_by: str) -> tuple[str,
         events.append({"type": "error", "message": f"could not obtain a database credential: {exc}"})
         return "I couldn't reach the database right now.", events
 
+    auth = session.auth_event()
+    if auth:
+        events.append(auth)
     events.append({
         "type": "credential_issued",
         "lease_id": creds["lease_id"],

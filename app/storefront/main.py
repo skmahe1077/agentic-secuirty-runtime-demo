@@ -1,15 +1,19 @@
-"""Nimbus Store storefront.
+"""Mahi Stores storefront.
 
-Serves the shop UI and proxies the support chat widget to one of two agent
-services (`agent-insecure` / `agent-secure`), so the audience can flip
-between them mid-demo. The agent's identity/credential telemetry comes back
-on every chat response and the UI renders it in the "Identity & Access"
-panel -- deliberately a plain polled JSON state rather than an SSE stream,
-so there is nothing to silently disconnect on stage.
+Serves the shop UI and proxies the support chat widget to one of three real
+agent backends (`agent-insecure` / `order-agent` / `refund-agent`). The
+customer only ever picks "Legacy" vs "Zero-trust" (`insecure` vs `secure`)
+in the UI -- which of the two real zero-trust identities actually handles a
+"secure" request is decided here, automatically, by `_resolve()`. The
+agent's identity/credential telemetry comes back on every chat response and
+the UI renders it in the "Security Flow" panel -- deliberately a plain
+polled JSON state rather than an SSE stream, so there is nothing to
+silently disconnect on stage.
 """
 from __future__ import annotations
 
 import os
+import re
 import time
 
 import httpx
@@ -22,10 +26,39 @@ import db
 
 AGENT_URLS = {
     "insecure": os.environ.get("AGENT_INSECURE_URL", "http://localhost:8001"),
-    "secure": os.environ.get("AGENT_SECURE_URL", "http://localhost:8002"),
+    "order": os.environ.get("AGENT_ORDER_URL", "http://localhost:8003"),
+    "refund": os.environ.get("AGENT_REFUND_URL", "http://localhost:8002"),
 }
 
-app = FastAPI(title="Nimbus Store")
+# thread_id -> which real backend ("order" | "refund") is handling this
+# "secure"-mode conversation, so a resume (no message to classify) or a
+# revoke lands on the same identity that started the turn.
+_secure_routing: dict[str, str] = {}
+
+_REFUND_INTENT_RE = re.compile(r"refund", re.IGNORECASE)
+
+
+def _resolve(agent: str, thread_id: str, message: str | None = None) -> str:
+    """Picks the real backend for a public `agent` value. "insecure" maps
+    straight through. "secure" is a dispatch, not a backend: order-agent
+    (read-only) by default -- least privilege, don't hand out refund
+    capability unless the task needs it -- escalating to refund-agent only
+    when the message actually asks for a refund. This classifier is a UX
+    convenience, not the security boundary: a mis-route to order-agent
+    fails cleanly (a `denied` event, see actions.py's issue_refund) rather
+    than granting anything, because Vault/PostgreSQL enforce the real
+    boundary regardless of what this guesses."""
+    if agent != "secure":
+        return agent
+    if message and _REFUND_INTENT_RE.search(message):
+        backend = "refund"
+    else:
+        backend = _secure_routing.get(thread_id, "order")
+    _secure_routing[thread_id] = backend
+    return backend
+
+
+app = FastAPI(title="Mahi Stores")
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -96,11 +129,12 @@ class ChatRequest(BaseModel):
 
 @app.post("/api/support/chat")
 def api_chat(req: ChatRequest):
-    if req.agent not in AGENT_URLS:
+    if req.agent not in ("insecure", "secure"):
         raise HTTPException(400, f"unknown agent '{req.agent}'")
+    backend = _resolve(req.agent, req.thread_id, req.message)
     try:
         r = httpx.post(
-            f"{AGENT_URLS[req.agent]}/chat",
+            f"{AGENT_URLS[backend]}/chat",
             json={
                 "customer_id": req.customer_id,
                 "message": req.message,
@@ -110,7 +144,7 @@ def api_chat(req: ChatRequest):
         )
         r.raise_for_status()
     except httpx.HTTPError as exc:
-        raise HTTPException(502, f"agent '{req.agent}' unreachable: {exc}") from exc
+        raise HTTPException(502, f"agent '{backend}' unreachable: {exc}") from exc
     payload = r.json()
     _record(payload.get("events", []))
     return payload
@@ -124,17 +158,20 @@ class ResumeRequest(BaseModel):
 
 @app.post("/api/support/resume")
 def api_resume(req: ResumeRequest):
-    if req.agent not in AGENT_URLS:
+    if req.agent not in ("insecure", "secure"):
         raise HTTPException(400, f"unknown agent '{req.agent}'")
+    # No message to classify on resume -- reuses whichever backend this
+    # thread already routed to in api_chat.
+    backend = _resolve(req.agent, req.thread_id)
     try:
         r = httpx.post(
-            f"{AGENT_URLS[req.agent]}/resume",
+            f"{AGENT_URLS[backend]}/resume",
             json={"thread_id": req.thread_id, "approved_by": req.approved_by},
             timeout=30.0,
         )
         r.raise_for_status()
     except httpx.HTTPError as exc:
-        raise HTTPException(502, f"agent '{req.agent}' unreachable: {exc}") from exc
+        raise HTTPException(502, f"agent '{backend}' unreachable: {exc}") from exc
     payload = r.json()
     _record(payload.get("events", []))
     return payload
@@ -142,17 +179,19 @@ def api_resume(req: ResumeRequest):
 
 class RevokeRequest(BaseModel):
     agent: str = "secure"
+    thread_id: str = "demo"
 
 
 @app.post("/api/admin/revoke")
 def api_revoke(req: RevokeRequest):
     """Beat 2's money shot: force the currently live Vault lease to die on
     command instead of waiting out its TTL."""
+    backend = _resolve(req.agent, req.thread_id)
     try:
-        r = httpx.post(f"{AGENT_URLS[req.agent]}/vault/revoke", timeout=10.0)
+        r = httpx.post(f"{AGENT_URLS[backend]}/vault/revoke", timeout=10.0)
         r.raise_for_status()
     except httpx.HTTPError as exc:
-        raise HTTPException(502, f"agent '{req.agent}' unreachable: {exc}") from exc
+        raise HTTPException(502, f"agent '{backend}' unreachable: {exc}") from exc
     payload = r.json()
     _record(payload.get("events", []))
     return payload
@@ -180,4 +219,5 @@ def api_reset():
     cleared. Does not touch Vault leases -- run `scripts/reset.sh` for that."""
     db.reset_demo_state()
     _panel_log.clear()
+    _secure_routing.clear()
     return {"ok": True}

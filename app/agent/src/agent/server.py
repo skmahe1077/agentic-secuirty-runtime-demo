@@ -68,6 +68,11 @@ def vault_revoke():
     event = session.revoke()
     if event is None:
         raise HTTPException(409, "no active credential to revoke")
+    # revoke() can itself trigger a fresh Vault login (to get a client
+    # authenticated enough to call sys/leases/revoke) if the cached client's
+    # token had already expired -- drain that here so a stray auth_completed
+    # event doesn't surface misattributed to some later, unrelated turn.
+    session.auth_event()
     return {"events": [event]}
 
 

@@ -35,10 +35,12 @@ services:
       # role locally that the EKS deployment uses.
       DATABASE_URL: postgresql://nimbus_storefront:ChangeMeViaStorefrontDbPassword@postgres:5432/nimbus
       AGENT_INSECURE_URL: http://agent-insecure:8000
-      # Deliberately left unset/unreachable -- there is no agent-secure
-      # locally (see header comment). Selecting "secure" in the UI fails
-      # cleanly ("unreachable") rather than silently serving insecure
-      # traffic under the secure label.
+      # AGENT_ORDER_URL / AGENT_REFUND_URL deliberately left unset/
+      # unreachable -- there is neither order-agent nor refund-agent
+      # locally (see header comment). "secure" mode dispatches to one of
+      # them automatically (app/storefront/main.py's _resolve()); either
+      # way it fails cleanly ("unreachable") rather than silently serving
+      # insecure traffic under the secure label.
     ports:
       - "8000:8000"
     depends_on:
@@ -57,7 +59,14 @@ services:
       DATABASE_NAME: nimbus
       STATIC_DB_USER: nimbus_app_legacy
       STATIC_DB_PASSWORD: LegacyStaticPassword123!
-      AGENT_ENGINE: deterministic
+      # deterministic by default -- set AGENT_ENGINE=langchain in a
+      # gitignored .env file (alongside ANTHROPIC_API_KEY) to run the real
+      # Claude-powered agent (app/agent/src/agent/langchain_engine.py)
+      # instead of the regex stand-in. Same image either way -- both
+      # engines are always installed (see app/agent/requirements.txt).
+      AGENT_ENGINE: ${AGENT_ENGINE:-deterministic}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
     ports:
       - "8001:8000"
     depends_on:

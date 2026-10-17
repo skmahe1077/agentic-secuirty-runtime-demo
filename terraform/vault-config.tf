@@ -44,6 +44,22 @@ resource "vault_generic_endpoint" "spiffe_role" {
   depends_on = [vault_generic_endpoint.spiffe_config]
 }
 
+# A second, genuinely separate SPIFFE identity for order-agent -- not a
+# second role bound to the same workload. Its own ClusterSPIFFEID
+# (k8s_manifests/spire/values.yaml) issues it its own SVID; this role is
+# what lets THAT identity (and no other) log in as order-agent.
+resource "vault_generic_endpoint" "spiffe_role_order_agent" {
+  path                 = "auth/spiffe/role/${var.order_agent_service_account}"
+  ignore_absent_fields = true
+  data_json = jsonencode({
+    workload_id_patterns = ["ns/${var.agent_namespace}/sa/${var.order_agent_service_account}"]
+    token_policies       = [vault_policy.order_agent_policy.name]
+    token_ttl            = "300"
+  })
+
+  depends_on = [vault_generic_endpoint.spiffe_config]
+}
+
 # ---- database secrets engine ---------------------------------------------
 
 resource "vault_mount" "database" {
@@ -54,7 +70,7 @@ resource "vault_mount" "database" {
 resource "vault_database_secret_backend_connection" "nimbus" {
   backend       = vault_mount.database.path
   name          = "nimbus-rds"
-  allowed_roles = ["refund-writer"]
+  allowed_roles = ["refund-writer", "order-reader"]
 
   postgresql {
     connection_url = "postgresql://{{username}}:{{password}}@${aws_db_instance.nimbus.address}:5432/${var.db_name}?sslmode=require"
@@ -106,6 +122,40 @@ resource "vault_database_secret_backend_role" "refund_writer" {
   max_ttl     = 600 # 10 minutes
 }
 
+# order-agent's role: read-only, deliberately no INSERT on refunds and no
+# UPDATE anywhere. This -- not the ceiling policy -- is the PROVEN
+# restriction mechanism in this repo: if order-agent is asked for a refund,
+# PostgreSQL refuses the write, exactly like the customers-table denial
+# below. See app/agent/src/agent/actions.py's issue_refund() for the
+# InsufficientPrivilege catch that turns this into a clean `denied` event.
+resource "vault_database_secret_backend_role" "order_reader" {
+  backend = vault_mount.database.path
+  name    = "order-reader"
+  db_name = vault_database_secret_backend_connection.nimbus.name
+
+  creation_statements = [
+    <<-SQL
+    CREATE ROLE "{{name}}" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';
+    GRANT CONNECT ON DATABASE ${var.db_name} TO "{{name}}";
+    GRANT USAGE ON SCHEMA public TO "{{name}}";
+    GRANT SELECT ON orders TO "{{name}}";
+    GRANT SELECT ON products TO "{{name}}";
+    SQL
+  ]
+  revocation_statements = [
+    <<-SQL
+    REVOKE ALL PRIVILEGES ON products FROM "{{name}}";
+    REVOKE ALL PRIVILEGES ON orders FROM "{{name}}";
+    REVOKE USAGE ON SCHEMA public FROM "{{name}}";
+    REVOKE CONNECT ON DATABASE ${var.db_name} FROM "{{name}}";
+    DROP ROLE IF EXISTS "{{name}}";
+    SQL
+  ]
+
+  default_ttl = 180 # 3 minutes
+  max_ttl     = 600 # 10 minutes
+}
+
 # ---- policy ---------------------------------------------------------------
 # sys/leases/revoke and auth/token/create are NOT implied by read access to
 # database/creds/* -- both were missing in the first draft of this policy
@@ -123,6 +173,24 @@ resource "vault_policy" "agent_support" {
     }
     path "auth/token/create" {
       capabilities = ["create", "update"]
+    }
+  EOT
+}
+
+# order-agent's real Vault policy -- deliberately narrower than
+# agent-support: no auth/token/create (order-agent never mints an approval
+# child-token, it never issues anything that needs approval). Keeps
+# sys/leases/revoke so the storefront's "Revoke now" button still works on
+# an order-agent credential -- revoking its own lease early is strictly
+# MORE restrictive, not less, so there's no reason to withhold it.
+resource "vault_policy" "order_agent_policy" {
+  name   = "order-agent-policy"
+  policy = <<-EOT
+    path "database/creds/order-reader" {
+      capabilities = ["read"]
+    }
+    path "sys/leases/revoke" {
+      capabilities = ["update"]
     }
   EOT
 }

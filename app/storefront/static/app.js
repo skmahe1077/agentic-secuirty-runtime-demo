@@ -1,15 +1,17 @@
-// Nimbus Store frontend. No build step, no framework -- this runs
+// Mahi Stores frontend. No build step, no framework -- this runs
 // unmodified off a static file mount so there's one less thing to break on
 // stage.
 //
 // Event contract (produced by the agent services, relayed verbatim by the
 // storefront, consumed here):
 //   { type: "identity", spiffe_id, svid_expires_at, ttl_seconds, message }
+//   { type: "auth_completed", auth_mount, message }
 //   { type: "credential_issued", lease_id, lease_role, expires_at, ttl_seconds,
 //     scope: [{resource, action, allowed}],
 //     approval: {approval_id, approved_by, spiffe_id} | null, message }
 //   { type: "credential_revoked", lease_id, message }
 //   { type: "denied", resource, message }
+//   { type: "scope_violation", resource, message }
 //   { type: "approval_requested", approval_id, amount_pence, message }
 //   { type: "approval_granted", approval_id, approved_by, message }
 //   { type: "refund_issued", order_id, amount_pence, message }
@@ -17,12 +19,59 @@
 // Every event also carries `ts` (epoch seconds), added by the storefront if
 // the agent didn't set one.
 
+// The Security Flow panel's 6 stages. One source of truth for both the
+// compact stage boxes and the detail drawer -- content lives here, not in
+// index.html. Each stage's `eventTypes` is what actually completes it; no
+// stage is faked complete by a timer or a scripted sequence.
+const STAGES = [
+  {
+    id: "identity", num: 1, label: "Identity", eventTypes: ["identity"],
+    what: "SPIRE issues the agent pod a short-lived JWT-SVID over the SPIFFE Workload API, written to disk by the spiffe-helper sidecar.",
+    why: "The agent's identity exists before it ever calls Vault -- it isn't minted on the fly or typed in by anyone.",
+    tags: ["SPIRE", "JWT-SVID", "5 min TTL"],
+  },
+  {
+    id: "auth", num: 2, label: "Auth", eventTypes: ["auth_completed"],
+    what: "The agent presents its SVID as a Bearer token to Vault's native auth/spiffe method, which verifies the signature and issues a short-lived Vault token.",
+    why: "No password, no API key -- identity is the credential. A workload with a different identity is refused outright.",
+    tags: ["auth/spiffe", "Vault Enterprise"],
+  },
+  {
+    id: "credential", num: 3, label: "Credential", eventTypes: ["credential_issued"],
+    what: "Vault's database secrets engine mints a brand-new PostgreSQL role, scoped to exactly orders:SELECT + refunds:INSERT, with a 3-minute TTL.",
+    why: "The credential is task-scoped and self-destructing -- not a standing password that outlives the task.",
+    tags: ["database secrets engine", "180s TTL", "least privilege"],
+  },
+  {
+    id: "approval", num: 4, label: "Approval", eventTypes: ["approval_requested", "approval_granted"],
+    what: "Refunds over the threshold pause the agent and wait for a named human to approve; the approval becomes metadata on a freshly-minted Vault child token.",
+    why: "Human intent and agent action are tied to the same auditable event -- not two logs to stitch together by hand.",
+    tags: ["human-in-the-loop", "Vault child token"],
+  },
+  {
+    id: "execute", num: 5, label: "Execute", eventTypes: ["refund_issued", "denied", "scope_violation"],
+    what: "The scoped credential runs exactly one query -- PostgreSQL itself enforces the boundary, not application logic.",
+    why: "Ask for something outside scope (another customer's PII) and the database refuses it -- the same mechanism, not a special case.",
+    tags: ["PostgreSQL grants"],
+  },
+  {
+    id: "revoke", num: 6, label: "Revoke", eventTypes: ["credential_revoked"],
+    what: "The lease is killed -- on command, or automatically at 3 minutes -- and the PostgreSQL role backing it is dropped.",
+    why: "There is nothing left to steal once this happens. No key rotation needed, because there's no standing key.",
+    tags: ["vault lease revoke"],
+  },
+];
+const STAGE_BY_TYPE = {};
+for (const s of STAGES) for (const t of s.eventTypes) STAGE_BY_TYPE[t] = (STAGE_BY_TYPE[t] || []).concat(s.id);
+
 const state = {
   customerId: 1,
   agent: "secure",
   identity: null,       // last identity event
   lease: null,           // last credential_issued event (cleared on revoke/expiry)
   correlation: null,     // last approved credential's {approved_by, spiffe_id, lease_id, approval_id, ts} -- NOT cleared on revoke, see applyEvents
+  stageEvents: Object.fromEntries(STAGES.map((s) => [s.id, []])),
+  openStage: null,        // which stage's detail drawer is open, if any
   pendingApproval: null, // {approval_id, thread_id}
   threadId: "demo",
 };
@@ -97,15 +146,52 @@ function addChatBubble(text, who, denied) {
   bubble.textContent = text;
   log.appendChild(bubble);
   log.scrollTop = log.scrollHeight;
+  return bubble;
+}
+
+// Quick-reply chips, shown above the input. Clicking one sends it through
+// the exact same path as typing it -- no separate code path to keep honest.
+const SUGGESTIONS = ["Check my order status", "Request a refund"];
+function renderSuggestions() {
+  const wrap = $("chat-suggestions");
+  wrap.innerHTML = "";
+  for (const text of SUGGESTIONS) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "tag chip";
+    chip.textContent = text;
+    chip.addEventListener("click", () => {
+      $("chat-input").value = text;
+      $("chat-form").requestSubmit();
+    });
+    wrap.appendChild(chip);
+  }
+}
+
+// A loading-state label guessed from the customer's own message -- not
+// fabricated telemetry, just what's about to be asked for. The real
+// events (and which backend actually handled it) only arrive with the
+// response; this bubble is removed the moment they do.
+function _guessCallingLabel(message) {
+  if (/refund/i.test(message)) return "Calling issue_refund…";
+  if (/order|status|track|where is|find/i.test(message)) return "Calling lookup_order…";
+  return "Calling support agent…";
 }
 
 $("chat-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const input = $("chat-input");
+  const sendBtn = $("chat-form").querySelector("button[type=submit]");
   const message = input.value.trim();
   if (!message) return;
   addChatBubble(message, "user");
   input.value = "";
+
+  const callingBubble = addChatBubble(_guessCallingLabel(message), "calling");
+  const placeholder = input.placeholder;
+  input.disabled = true;
+  sendBtn.disabled = true;
+  input.placeholder = "Waiting…";
   try {
     const resp = await j("POST", "/api/support/chat", {
       customer_id: state.customerId,
@@ -113,9 +199,16 @@ $("chat-form").addEventListener("submit", async (e) => {
       message,
       thread_id: state.threadId,
     });
+    callingBubble.remove();
     handleAgentResponse(resp);
   } catch (err) {
+    callingBubble.remove();
     addChatBubble(`(error contacting agent: ${err})`, "agent", true);
+  } finally {
+    input.disabled = false;
+    sendBtn.disabled = false;
+    input.placeholder = placeholder;
+    input.focus();
   }
 });
 
@@ -158,20 +251,29 @@ $("approve-btn").addEventListener("click", async () => {
 
 $("revoke-btn").addEventListener("click", async () => {
   try {
-    const resp = await j("POST", "/api/admin/revoke", { agent: state.agent });
+    const resp = await j("POST", "/api/admin/revoke", { agent: state.agent, thread_id: state.threadId });
     applyEvents(resp.events || []);
   } catch (err) {
     addChatBubble(`(revoke failed: ${err})`, "agent", true);
   }
 });
 
-$("reset-btn").addEventListener("click", async () => {
-  await j("POST", "/api/admin/reset");
+function resetFlowState() {
   state.lease = null;
   state.identity = null;
   state.correlation = null;
+  state.openStage = null;
+  for (const s of STAGES) state.stageEvents[s.id] = [];
+  $("stage-detail").classList.add("hidden");
+}
+
+$("reset-btn").addEventListener("click", async () => {
+  await j("POST", "/api/admin/reset");
+  resetFlowState();
   $("chat-log").innerHTML = "";
-  renderPanel();
+  $("event-log").innerHTML = "";
+  renderFlow();
+  renderSuggestions();
   loadOrders();
 });
 
@@ -181,24 +283,25 @@ $("customer-picker").addEventListener("change", (e) => {
 });
 $("agent-picker").addEventListener("change", (e) => {
   state.agent = e.target.value;
-  state.lease = null;
-  state.identity = null;
-  state.correlation = null;
-  renderPanel();
+  resetFlowState();
+  renderFlow();
 });
 
-// ---------- Identity & Access panel ----------
+// ---------- Security Flow panel ----------
 
 function applyEvents(events) {
   for (const e of events) {
     logEvent(e);
+    const stageIds = STAGE_BY_TYPE[e.type] || [];
+    for (const id of stageIds) state.stageEvents[id].push(e);
+
     if (e.type === "identity") state.identity = e;
     if (e.type === "credential_issued") {
       state.lease = e;
       if (e.approval) {
         // Deliberately NOT cleared on revoke or expiry below: the
         // credential is ephemeral, the record of who authorised it is
-        // not. That asymmetry is the "audit-ready" claim this tile makes.
+        // not. That asymmetry is what the Approval stage's detail shows.
         state.correlation = { ...e.approval, lease_id: e.lease_id, ts: e.ts || Date.now() / 1000 };
       }
     }
@@ -206,7 +309,7 @@ function applyEvents(events) {
       state.lease = { ...state.lease, revoked: true };
     }
   }
-  renderPanel();
+  renderFlow();
 }
 
 function logEvent(e) {
@@ -230,74 +333,6 @@ function dotClassFor(e) {
   return "neutral";
 }
 
-function renderPanel() {
-  // identity tile
-  if (state.identity) {
-    $("identity-value").textContent = state.identity.spiffe_id || "static credential (no workload identity)";
-    $("identity-sub").textContent = state.identity.spiffe_id
-      ? `SVID ${remainingLabel(state.identity.svid_expires_at)}`
-      : "no SPIFFE identity -- this agent proves nothing about itself";
-  } else {
-    $("identity-value").textContent = "—";
-    $("identity-sub").textContent = "";
-  }
-
-  // lease tile
-  const revokeBtn = $("revoke-btn");
-  if (state.lease && !state.lease.revoked) {
-    $("lease-value").textContent = `${state.lease.lease_role || "credential"} / ${shortLease(state.lease.lease_id)}`;
-    $("lease-sub").textContent = remainingLabel(state.lease.expires_at);
-    revokeBtn.classList.remove("hidden");
-  } else if (state.lease && state.lease.revoked) {
-    $("lease-value").textContent = `${shortLease(state.lease.lease_id)} — revoked`;
-    $("lease-sub").textContent = "credential no longer exists";
-    $("lease-meter").style.width = "0%";
-    $("lease-meter").className = "meter-fill critical";
-    revokeBtn.classList.add("hidden");
-  } else {
-    $("lease-value").textContent = "—";
-    $("lease-sub").textContent = "no standing credential held";
-    $("lease-meter").style.width = "0%";
-    revokeBtn.classList.add("hidden");
-  }
-
-  // correlation tile -- the talk's "audit-ready controls" proof point now
-  // lives here instead of in a Vault audit-log reveal (see
-  // app/agent/src/agent/vault.py's get_db_credentials)
-  const corrTile = $("tile-correlation");
-  if (state.agent === "insecure") {
-    corrTile.classList.remove("hidden");
-    $("corr-approver").textContent = "—";
-    $("corr-spiffe").textContent = "—";
-    $("corr-lease").textContent = "—";
-    $("corr-approval-id").textContent = "—";
-    $("corr-ts").textContent = "no correlation possible -- this credential has no identity and no approval binding";
-  } else if (state.correlation) {
-    corrTile.classList.remove("hidden");
-    $("corr-approver").textContent = state.correlation.approved_by || "—";
-    $("corr-spiffe").textContent = state.correlation.spiffe_id || "—";
-    $("corr-lease").textContent = shortLease(state.correlation.lease_id);
-    $("corr-approval-id").textContent = state.correlation.approval_id || "—";
-    $("corr-ts").textContent = fmtTime(state.correlation.ts);
-  } else {
-    corrTile.classList.add("hidden");
-  }
-
-  // scope tile
-  const scopeList = $("scope-list");
-  scopeList.innerHTML = "";
-  const scope = (state.lease && state.lease.scope) || [];
-  if (scope.length === 0) {
-    scopeList.innerHTML = '<li class="tile-sub">no active scope</li>';
-  }
-  for (const s of scope) {
-    const li = document.createElement("li");
-    li.className = s.allowed ? "allowed" : "denied";
-    li.textContent = `${s.allowed ? "✓" : "✗"} ${s.action} ${s.resource}`;
-    scopeList.appendChild(li);
-  }
-}
-
 function shortLease(leaseId) {
   if (!leaseId) return "";
   const parts = leaseId.split("/");
@@ -312,43 +347,203 @@ function remainingLabel(expiresAt) {
   return `expires in ${m}:${String(s).padStart(2, "0")}`;
 }
 
-// Local ticking clock for the lease meter -- purely cosmetic, driven off
-// the `expires_at` + `ttl_seconds` the agent sent with credential_issued.
-function tickMeter() {
-  if (state.lease && !state.lease.revoked && state.lease.expires_at) {
-    const total = state.lease.ttl_seconds || 180;
-    const remaining = Math.max(0, state.lease.expires_at - Date.now() / 1000);
-    const frac = Math.max(0, Math.min(1, remaining / total));
-    const meter = $("lease-meter");
-    meter.style.width = `${frac * 100}%`;
-    meter.className = "meter-fill" + (frac < 0.15 ? " critical" : frac < 0.4 ? " warning" : "");
-    $("lease-sub").textContent = remainingLabel(state.lease.expires_at);
-    if (remaining <= 0) {
-      state.lease.revoked = true;
-      renderPanel();
+function buildFlowDOM() {
+  const flow = $("flow");
+  flow.innerHTML = "";
+  for (const s of STAGES) {
+    const box = document.createElement("div");
+    box.className = "flow-stage";
+    box.id = `flow-${s.id}`;
+    box.innerHTML = `
+      <div class="flow-stage-head">
+        <span class="flow-num">${s.num}</span>
+        <span class="flow-label">${s.label}</span>
+      </div>
+      <div class="flow-sub" id="flow-sub-${s.id}">—</div>`;
+    box.addEventListener("click", () => openStageDetail(s.id));
+    flow.appendChild(box);
+  }
+}
+
+function openStageDetail(id) {
+  state.openStage = id;
+  $("stage-detail").classList.remove("hidden");
+  renderFlow();
+}
+$("stage-detail-close").addEventListener("click", () => {
+  state.openStage = null;
+  $("stage-detail").classList.add("hidden");
+  renderFlow();
+});
+
+// Exactly one stage, Auth, genuinely never fires for agent-insecure --
+// StaticCredentialSession.auth_event() always returns null, there is no
+// auth/spiffe login to report. Every other stage renders from whatever
+// real events actually happened (lookup_order/issue_refund's approval
+// gate, for instance, runs for BOTH agents -- it is not Vault-specific).
+function isForcedAbsent(stageId) {
+  return stageId === "auth" && state.agent === "insecure";
+}
+
+function renderFlow() {
+  for (const s of STAGES) {
+    const box = $(`flow-${s.id}`);
+    if (!box) continue;
+    const events = state.stageEvents[s.id];
+    let status, subtitle;
+    if (isForcedAbsent(s.id)) {
+      status = "absent";
+      subtitle = "no Vault login -- a static password needs no auth step";
+    } else if (events.length > 0) {
+      status = "complete";
+      subtitle = events[events.length - 1].message || "";
+    } else {
+      status = "pending";
+      subtitle = "—";
+    }
+    box.className = `flow-stage ${status}` + (state.openStage === s.id ? " open" : "");
+    $(`flow-sub-${s.id}`).textContent = subtitle;
+  }
+  if (state.openStage) renderStageDetail(state.openStage);
+}
+
+function renderStageDetail(id) {
+  const s = STAGES.find((x) => x.id === id);
+  $("stage-detail-label").textContent = `${s.num}. ${s.label}`;
+  $("stage-detail-what").textContent = s.what;
+  $("stage-detail-why").textContent = s.why;
+
+  const tagsEl = $("stage-detail-tags");
+  tagsEl.innerHTML = "";
+  for (const t of s.tags) {
+    const tag = document.createElement("span");
+    tag.className = "tag";
+    tag.textContent = t;
+    tagsEl.appendChild(tag);
+  }
+
+  // live countdown -- identity (SVID) and credential (Vault lease) only
+  const liveEl = $("stage-detail-live");
+  if (id === "identity" && state.identity && state.identity.spiffe_id) {
+    liveEl.classList.remove("hidden");
+    liveEl.textContent = `${state.identity.spiffe_id} -- SVID ${remainingLabel(state.identity.svid_expires_at)}`;
+  } else if (id === "identity" && state.identity) {
+    liveEl.classList.remove("hidden");
+    liveEl.textContent = "no SPIFFE identity -- this agent proves nothing about itself";
+  } else if (id === "credential" && state.lease) {
+    liveEl.classList.remove("hidden");
+    liveEl.textContent = state.lease.revoked
+      ? `${state.lease.lease_role || "credential"} / ${shortLease(state.lease.lease_id)} — revoked`
+      : `${state.lease.lease_role || "credential"} / ${shortLease(state.lease.lease_id)} — ${remainingLabel(state.lease.expires_at)}`;
+  } else {
+    liveEl.classList.add("hidden");
+  }
+
+  // scope, credential stage only
+  if (id === "credential") {
+    const scope = (state.lease && state.lease.scope) || [];
+    if (scope.length) {
+      const list = document.createElement("ul");
+      list.className = "scope-list";
+      for (const sc of scope) {
+        const li = document.createElement("li");
+        li.className = sc.allowed ? "allowed" : "denied";
+        li.textContent = `${sc.allowed ? "✓" : "✗"} ${sc.action} ${sc.resource}`;
+        list.appendChild(li);
+      }
+      liveEl.appendChild(list);
+      liveEl.classList.remove("hidden");
     }
   }
-  if (state.identity && state.identity.svid_expires_at) {
-    $("identity-sub").textContent = state.identity.spiffe_id
-      ? `SVID ${remainingLabel(state.identity.svid_expires_at)}`
-      : "";
+
+  // correlation -- the "audit-ready" proof point, approval stage only,
+  // deliberately NOT cleared by a later revoke (see applyEvents)
+  const corrBlock = $("stage-detail-correlation");
+  if (id === "approval" && state.agent !== "insecure" && state.correlation) {
+    corrBlock.classList.remove("hidden");
+    $("corr-approver").textContent = state.correlation.approved_by || "—";
+    $("corr-spiffe").textContent = state.correlation.spiffe_id || "—";
+    $("corr-lease").textContent = shortLease(state.correlation.lease_id);
+  } else {
+    corrBlock.classList.add("hidden");
   }
+
+  // live TTL meter + revoke button, credential stage only
+  const meterWrap = $("stage-detail-meter-wrap");
+  const revokeBtn = $("revoke-btn");
+  if (id === "credential" && state.lease && !state.lease.revoked) {
+    meterWrap.classList.remove("hidden");
+    revokeBtn.classList.remove("hidden");
+  } else {
+    meterWrap.classList.add("hidden");
+    revokeBtn.classList.add("hidden");
+  }
+
+  // this run
+  const logEl = $("stage-detail-log");
+  logEl.innerHTML = "";
+  const events = state.stageEvents[id] || [];
+  if (events.length === 0) {
+    logEl.innerHTML = '<li class="tile-sub">nothing yet this run</li>';
+  }
+  for (const e of events) {
+    const li = document.createElement("li");
+    const time = document.createElement("time");
+    time.textContent = fmtTime(e.ts || Date.now() / 1000);
+    const text = document.createElement("span");
+    text.textContent = e.message || e.type;
+    li.append(time, text);
+    logEl.appendChild(li);
+  }
+}
+
+// Local ticking clock for live countdowns -- purely cosmetic, driven off
+// the `expires_at`/`svid_expires_at` the agent already sent. Touches only
+// the stage box subtitle (always) and the detail drawer (only when open),
+// never re-derives status from a timer -- a stage only completes on a
+// real event.
+function tickMeter() {
+  if (state.lease && !state.lease.revoked && state.lease.expires_at) {
+    const remaining = Math.max(0, state.lease.expires_at - Date.now() / 1000);
+    const subEl = $("flow-sub-credential");
+    if (subEl) subEl.textContent = `${state.lease.lease_role || "credential"} -- ${remainingLabel(state.lease.expires_at)}`;
+    if (state.openStage === "credential") {
+      const total = state.lease.ttl_seconds || 180;
+      const frac = Math.max(0, Math.min(1, remaining / total));
+      const meter = $("lease-meter");
+      meter.style.width = `${frac * 100}%`;
+      meter.className = "meter-fill" + (frac < 0.15 ? " critical" : frac < 0.4 ? " warning" : "");
+    }
+    if (remaining <= 0) {
+      state.lease.revoked = true;
+      renderFlow();
+    }
+  }
+  if (state.openStage === "identity" || state.openStage === "credential") renderStageDetail(state.openStage);
 }
 setInterval(tickMeter, 500);
 
-// Poll server state so a page refresh mid-demo doesn't lose the log.
+// Poll server state so a page refresh mid-demo doesn't lose the log or
+// the flow panel's progress.
 async function pollState() {
   try {
     const s = await j("GET", "/api/state");
-    // Only backfill the log on first load; live updates come from direct responses.
+    // Only backfill on first load; live updates come from direct responses.
     if ($("event-log").children.length === 0) {
-      for (const e of s.log) logEvent(e);
-      const lastApproved = [...s.log].reverse()
-        .find((e) => e.type === "credential_issued" && e.approval);
-      if (lastApproved) {
-        state.correlation = { ...lastApproved.approval, lease_id: lastApproved.lease_id, ts: lastApproved.ts };
-        renderPanel();
+      for (const e of s.log) {
+        logEvent(e);
+        const stageIds = STAGE_BY_TYPE[e.type] || [];
+        for (const id of stageIds) state.stageEvents[id].push(e);
+        if (e.type === "identity") state.identity = e;
+        if (e.type === "credential_issued") {
+          state.lease = e;
+          if (e.approval) state.correlation = { ...e.approval, lease_id: e.lease_id, ts: e.ts };
+        }
+        if (e.type === "credential_revoked" && state.lease && state.lease.lease_id === e.lease_id) {
+          state.lease = { ...state.lease, revoked: true };
+        }
       }
+      renderFlow();
     }
   } catch (_) {
     /* storefront/agents still coming up -- ignore and retry */
@@ -356,9 +551,11 @@ async function pollState() {
 }
 
 (async function init() {
+  buildFlowDOM();
+  renderSuggestions();
   await loadCustomers();
   await loadProducts();
   await loadOrders();
   await pollState();
-  renderPanel();
+  renderFlow();
 })();

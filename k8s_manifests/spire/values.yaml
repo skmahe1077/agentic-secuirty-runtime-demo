@@ -31,9 +31,10 @@ spire-server:
   controllerManager:
     identities:
       clusterSPIFFEIDs:
-        # Matches terraform/variables.tf's agent_namespace/agent_service_account
-        # defaults and vault-config.tf's workload_id_patterns /
-        # bound_subject. If you change one, change all three.
+        # refund-agent. Matches terraform/variables.tf's
+        # agent_namespace/agent_service_account defaults and
+        # vault-config.tf's workload_id_patterns / bound_subject. If you
+        # change one, change all three.
         ai-support-agent-secure:
           namespaceSelector:
             matchExpressions:
@@ -46,4 +47,20 @@ spire-server:
           # 5 minutes -- SPIRE's own default, left alone deliberately so
           # the "short-lived credential" story is true by default rather
           # than tuned to look good on stage.
+          jwtTtl: "300s"
+        # order-agent -- a genuinely separate identity, same namespace.
+        # Matches terraform/variables.tf's order_agent_service_account and
+        # vault-config.tf's spiffe_role_order_agent. The namespace boundary
+        # already distinguishes nimbus/insecure from agents/secure; this
+        # podSelector is what distinguishes the two secure identities from
+        # each other within `agents`.
+        ai-order-agent:
+          namespaceSelector:
+            matchExpressions:
+              - key: "kubernetes.io/metadata.name"
+                operator: In
+                values: ["agents"]
+          podSelector:
+            matchLabels:
+              app: ai-order-agent
           jwtTtl: "300s"

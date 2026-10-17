@@ -8,10 +8,11 @@ metadata:
   name: storefront
   namespace: nimbus
 spec:
-  # Stays 1, not just for cost: app/storefront/main.py's `_panel_log` is
-  # in-process module state. A second replica would serve a different
-  # event history depending on which pod the ALB routed to, and the
-  # Identity & Access panel would flicker between two histories.
+  # Stays 1, not just for cost: app/storefront/main.py's `_panel_log` AND
+  # `_secure_routing` are in-process module state. A second replica would
+  # serve a different event history and could route the same thread's
+  # follow-up message to a different backend, depending on which pod the
+  # ALB landed on.
   replicas: 1
   selector:
     matchLabels:
@@ -40,7 +41,12 @@ spec:
               value: "postgresql://$(STOREFRONT_DB_USER):$(STOREFRONT_DB_PASSWORD)@${RDS_ENDPOINT}:5432/${DB_NAME}?sslmode=require"
             - name: AGENT_INSECURE_URL
               value: "http://agent-insecure.nimbus.svc.cluster.local:8000"
-            - name: AGENT_SECURE_URL
+            # "secure" mode is a dispatch between these two real identities
+            # -- see app/storefront/main.py's _resolve(). The customer
+            # never picks between them directly.
+            - name: AGENT_ORDER_URL
+              value: "http://order-agent.agents.svc.cluster.local:8000"
+            - name: AGENT_REFUND_URL
               value: "http://agent-secure.agents.svc.cluster.local:8000"
           readinessProbe:
             httpGet:

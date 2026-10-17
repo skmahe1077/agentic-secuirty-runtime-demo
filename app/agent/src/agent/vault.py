@@ -15,6 +15,7 @@ Both classes implement the same small interface so `actions.py` does not
 need to know which one it was handed:
     get_db_credentials() -> dict
     identity_event() -> dict | None
+    auth_event() -> dict | None
     revoke() -> dict | None
     status() -> dict
 """
@@ -60,6 +61,12 @@ class StaticCredentialSession:
                 f"(created {self.settings.static_credential_created_at}, no workload identity)"
             ),
         }
+
+    def auth_event(self) -> dict | None:
+        # No auth/spiffe login happens for this anti-pattern -- the "Auth"
+        # stage in the storefront's Security Flow panel has nothing to
+        # report, which is itself the point.
+        return None
 
     def get_db_credentials(self, approval_metadata: dict | None = None) -> dict:
         # The anti-pattern this class models has no concept of per-request
@@ -108,6 +115,11 @@ class VaultSession:
         self._client: hvac.Client | None = None
         self._cached: dict | None = None
         self._identity_announced = False
+        # Set True only on a FRESH login (not when _client_logged_in() serves
+        # the cached, already-authenticated client) -- consumed once by
+        # auth_event(), so the storefront's "Auth" stage reflects an actual
+        # auth/spiffe round trip, not every credential request.
+        self._last_login_fresh = False
 
     # -- identity -----------------------------------------------------
 
@@ -160,7 +172,18 @@ class VaultSession:
         client.token = resp["auth"]["client_token"]
 
         self._client = client
+        self._last_login_fresh = True
         return client
+
+    def auth_event(self) -> dict | None:
+        if not self._last_login_fresh:
+            return None
+        self._last_login_fresh = False
+        return {
+            "type": "auth_completed",
+            "auth_mount": self.settings.vault_auth_mount,
+            "message": f"authenticated via auth/{self.settings.vault_auth_mount}",
+        }
 
     def get_db_credentials(self, approval_metadata: dict | None = None) -> dict:
         now = time.time()

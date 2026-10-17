@@ -4,7 +4,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
 chat() { curl -s -X POST "$STOREFRONT_URL/api/support/chat" -H 'content-type: application/json' -d "$1"; }
-revoke() { curl -s -X POST "$STOREFRONT_URL/api/admin/revoke" -H 'content-type: application/json' -d '{"agent":"secure"}'; }
+revoke() { curl -s -X POST "$STOREFRONT_URL/api/admin/revoke" -H 'content-type: application/json' -d '{"agent":"secure","thread_id":"beat2"}'; }
 show() { python3 -c "
 import sys, json
 d = json.load(sys.stdin)

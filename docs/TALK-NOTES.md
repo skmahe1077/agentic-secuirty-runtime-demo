@@ -14,10 +14,10 @@ not just a slide claim:
 
 | Promised | Demonstrated by |
 |---|---|
-| **A practical architecture for registering agents** | SPIRE's `ClusterSPIFFEID` (`k8s_manifests/spire/values.yaml`) assigns a SPIFFE identity to the `agent-secure` pod by namespace + service account -- the identity exists before the agent ever calls Vault, not minted on the fly. Beat 4 adds Vault's own literal **Agent Registry**: `vault read agent-registry/registration/display-name/...` shows the agent as a first-class, inventoried identity with a ceiling policy, not just a token. |
+| **A practical architecture for registering agents** | SPIRE's `ClusterSPIFFEID`s (`k8s_manifests/spire/values.yaml`) assign a SPIFFE identity to each agent pod by namespace + service account -- the identity exists before the agent ever calls Vault, not minted on the fly. Beat 4 adds Vault's own literal **Agent Registry**: `vault read agent-registry/registration/display-name/order-agent` and `.../refund-agent` show two first-class, inventoried identities, each with its own ceiling policy -- not just tokens, and not just one agent. |
 | **Enforcing policy at every tool or API call** | Beat 2's scope tile: `orders:SELECT`, `refunds:INSERT` allowed, `customers` denied -- enforced by PostgreSQL grants on a Vault-issued role, re-checked on every query, not cached as a one-time login decision. |
 | **Connecting human intent to agent action** | Beat 3: the refund tool call interrupts for approval; the resulting Vault child token carries the approver's name as token metadata, so the *action* and the *approval* are the same auditable event, not two separate logs to correlate by hand. |
-| **Building audit-ready controls across Kubernetes, cloud-native, and hybrid environments** | Kubernetes = EKS running SPIRE, both agents, **and Vault itself** (Raft + KMS auto-unseal); cloud-native = Vault's dynamic credentials and AWS KMS; hybrid = the storefront's RDS connection crossing both. The **Audit correlation tile** in the Identity & Access panel is the "audit-ready" proof point: after an approved refund it shows the approver's name, the workload's SPIFFE ID, and the Vault lease id **on one card** -- and it stays there after the credential is revoked, because the credential is ephemeral and the record of who authorized it is not. Vault's own audit log carries the identical three fields on the same request and is verified by `scripts/03-verify.sh`; it is deliberately **not** shown on stage. |
+| **Building audit-ready controls across Kubernetes, cloud-native, and hybrid environments** | Kubernetes = EKS running SPIRE, both agents, **and Vault itself** (Raft + KMS auto-unseal); cloud-native = Vault's dynamic credentials and AWS KMS; hybrid = the storefront's RDS connection crossing both. The **Security Flow panel's Approval stage** is the "audit-ready" proof point: after an approved refund its detail drawer shows the approver's name, the workload's SPIFFE ID, and the Vault lease id **together** -- and it stays complete after the Credential stage is revoked, because the credential is ephemeral and the record of who authorized it is not. Vault's own audit log carries the identical three fields on the same request and is verified by `scripts/03-verify.sh`; it is deliberately **not** shown on stage. |
 
 Keep this table in view when cutting slides -- each promise should land on-screen as something
 that actually happened in the browser a moment earlier, not as a bullet point asserted on its
@@ -48,18 +48,21 @@ Switch the widget to `agent-secure`.
    nothing. No standing credential exists to find. (Presenter terminal -- "there is no secret
    in this pod" cannot be shown by a UI that only renders what the agent reports.)
 2. *(Optional -- consider cutting.)* `cat /svids/jwt_svid.token`, decode the payload: `sub` is
-   the full SPIFFE ID, `aud: vault`, `exp` five minutes out. The identity tile already shows
-   `spiffe_id` plus a live SVID expiry countdown, which is most of what the decoded payload
-   shows, in the medium the audience is already watching -- cutting this step saves a window
-   switch at the exact moment the panel is most interesting.
-3. Ask it to refund order #1045. The panel's lease tile appears, TTL ticking down from 180s,
-   scope `orders:SELECT`, `refunds:INSERT`, `customers: ✗ denied`.
+   the full SPIFFE ID, `aud: vault`, `exp` five minutes out. The Security Flow panel's
+   **Identity** stage, clicked open, already shows `spiffe_id` plus a live SVID expiry
+   countdown, which is most of what the decoded payload shows, in the medium the audience is
+   already watching -- cutting this step saves a window switch at the exact moment the panel
+   is most interesting.
+3. Ask it to refund order #1045. The **Identity** and **Auth** stages complete first (SPIRE,
+   then `auth/spiffe`), then **Credential** -- click it open to show the TTL ticking down from
+   180s, scope `orders:SELECT`, `refunds:INSERT`, `customers: ✗ denied`.
 4. Ask for a different order's customer, or for another customer's PII directly -- denied,
    and say why: *this isn't an if-statement, PostgreSQL itself has no grant for this role on
    `customers`.*
-5. **The money shot**: click **Revoke now** in the panel. Say *"this happens automatically in
-   three minutes -- forcing it now so the point lands before we move on."* Same query, now
-   fails. `pg_roles` has zero `v-%` rows.
+5. **The money shot**: click the **Credential** stage in the Security Flow panel, then
+   **Revoke now** in its detail drawer. Say *"this happens automatically in three minutes --
+   forcing it now so the point lands before we move on."* Same query, now fails. `pg_roles`
+   has zero `v-%` rows, and the Credential stage's live countdown flips to "revoked."
 
 Run with `scripts/demo-beat2.sh` as a rehearsal harness; on stage, perform this by clicking in
 the browser.
@@ -74,29 +77,44 @@ you don't.
    shows "awaiting approval."
 2. Approve it, by name, in the approval card.
 3. The agent proceeds under a **child Vault token** carrying the approval as token metadata.
-4. The **Audit correlation** tile fills in: approver, SPIFFE ID, lease id, timestamp -- all on
-   one card. Say the line: *"the credential is gone in three minutes -- this record is not."*
-   (Vault's own audit log carries the identical three fields on this request -- presenter-only
-   verification via `scripts/03-verify.sh`, not shown on stage.)
+4. Click the **Approval** stage in the Security Flow panel: its detail drawer now shows the
+   approver, SPIFFE ID, and lease id together. Say the line: *"the credential is gone in three
+   minutes -- this record is not."* (Vault's own audit log carries the identical three fields
+   on this request -- presenter-only verification via `scripts/03-verify.sh`, not shown on
+   stage.)
 
 Run with `scripts/demo-beat3.sh "<your name>"` as a rehearsal harness; on stage, perform this
 by clicking in the browser.
 
-## Beat 4 -- Agentic IAM (~2 min)
+## Beat 4 -- two agents, one registry, real restriction (~3 min)
 
-With jwt fallback removed and `auth/spiffe` as the only identity path, **every beat in this
-demo now needs the Enterprise license**, not just this one -- a real loss of optionality
-compared to the earlier Community/HCP-flexible build, and worth saying so if asked. This beat
-shows the HashiCorp product this repo is named after.
+With `auth/spiffe` as the only identity path, **every beat in this demo now needs the
+Enterprise license**, not just this one -- a real loss of optionality compared to the earlier
+Community/HCP-flexible build, and worth saying so if asked. This beat shows the HashiCorp
+product this repo is named after, and it's the one beat where the audience hasn't seen the
+mechanism yet: **there are two agents behind "Zero-trust," not one.**
 
-1. `vault read agent-registry/registration/display-name/ai-support-agent-secure` -- the agent
-   is a first-class, inventoried identity in Vault, not just a token.
-2. Present a JWT carrying an `authorization_details` claim constraining it to one path and one
-   capability. Then present the identical request with the wrong path, or the wrong
-   capability. Say the line: *"this is enforced on top of ACL policy, not instead of it --
-   both have to agree."* (See `docs/RUNBOOK.md`'s recorded 4a/4b/4c HTTP codes for exactly what
-   happens.)
-3. One sentence on what's deliberately NOT shown: real on-behalf-of human delegation needs an
+1. `vault read agent-registry/registration/display-name/order-agent` and
+   `.../display-name/refund-agent` -- both are first-class, inventoried identities in Vault,
+   each with its own ceiling policy, not just tokens.
+2. In the chat, ask a plain status question ("where is order #1043") -- say the line: *"this
+   got routed to the read-only agent, automatically -- nobody picked it."* Click the Identity
+   stage: `spiffe_id` ends `.../sa/ai-order-agent`.
+3. In the **same conversation**, ask for a refund. Click Identity again: it's now
+   `.../sa/ai-support-agent-secure` -- a completely different workload picked up the thread,
+   because the task changed. The refund succeeds.
+4. **The point**: start a *new* thread, and ask for a refund worded so the router's keyword
+   match misses (e.g. "can you sort out order #1042, it arrived damaged" -- no literal
+   "refund"). It still gets denied, cleanly. Say the line: *"the router is a convenience, not
+   the security boundary -- even when it guesses wrong, PostgreSQL still won't let the
+   read-only agent write a refund."* Run with `scripts/demo-beat4-agentic-iam.sh` as a
+   rehearsal harness for all of the above.
+5. One sentence on the RAR mechanism underneath (presenter-only detail, not usually worth a
+   live click): a JWT carrying an `authorization_details` claim constraining it to one path and
+   one capability is enforced *on top of* ACL policy, not instead of it -- both have to agree.
+   (See `docs/RUNBOOK.md`'s recorded 4a/4b/4c HTTP codes, and the ceiling-misconfiguration
+   test's result, for exactly what's confirmed.)
+6. One sentence on what's deliberately NOT shown: real on-behalf-of human delegation needs an
    enterprise IdP doing RFC 8693 token exchange -- *"the ceiling policy and RAR constraint you
    just saw are the mechanics; OBO is the next piece, and it needs an IdP most of you don't
    have yet."*

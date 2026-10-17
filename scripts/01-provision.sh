@@ -84,12 +84,14 @@ export VAULT_ADDR="$(tf_output vault_internal_addr)"
 kubectl apply -f "$REPO_ROOT/k8s_manifests/00-namespaces.yaml"
 for f in "$REPO_ROOT"/k8s_manifests/agent-insecure/*.yaml \
          "$REPO_ROOT"/k8s_manifests/agent-secure/*.yaml \
+         "$REPO_ROOT"/k8s_manifests/order-agent/*.yaml \
          "$REPO_ROOT"/k8s_manifests/storefront/*.yaml; do
   envsubst < "$f" | kubectl apply -f -
 done
 kubectl -n nimbus rollout status deployment/storefront --timeout=120s
 kubectl -n nimbus rollout status deployment/agent-insecure --timeout=120s
 kubectl -n agents rollout status deployment/agent-secure --timeout=120s
+kubectl -n agents rollout status deployment/order-agent --timeout=120s
 
 log "waiting for the storefront ALB to come up (2-4 min is normal)"
 for i in $(seq 1 60); do

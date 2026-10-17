@@ -1,7 +1,7 @@
 # agentic-security-runtime-demo
 
 A live-runnable demo for the talk **"No Standing Access for AI Agents with Vault Runtime
-Security and SPIFFE."** A small shopping site, **Nimbus Store**, has an AI customer-support
+Security and SPIFFE."** A small shopping site, **Mahi Stores**, has an AI customer-support
 agent that issues refunds. Two versions of that agent run side by side:
 
 - **`agent-insecure`** -- a static, long-lived database password. Standing access: the
@@ -10,10 +10,12 @@ agent that issues refunds. Two versions of that agent run side by side:
   token via the native `auth/spiffe` method, which mints a database credential scoped to one
   role with a 3-minute TTL, used once, then dead on command.
 
-A third beat shows a human approving a large refund; the storefront's **Identity & Access
-panel** correlates the approver's name, the workload's SPIFFE ID, and the Vault lease on one
-card. (Vault's own audit log carries the identical three fields -- enabled and verified by
-`scripts/03-verify.sh`, but presenter-only, not shown on stage.)
+A third beat shows a human approving a large refund; the storefront's **Security Flow** panel
+-- a live, 6-stage view of Identity → Auth → Credential → Approval → Execute → Revoke, driven
+by the agent's own real events -- correlates the approver's name, the workload's SPIFFE ID, and
+the Vault lease in the Approval stage's detail drawer. (Vault's own audit log carries the
+identical three fields -- enabled and verified by `scripts/03-verify.sh`, but presenter-only,
+not shown on stage.)
 
 A fourth beat demonstrates the real **Vault Agentic IAM** feature this repo is named after
 (Agent Registry + RAR) -- no longer gated behind a hypothetical license: this stack runs
@@ -23,21 +25,6 @@ applies unconditionally. See "Agentic IAM" below and `docs/RUNBOOK.md`.
 The demo is **presenter-driven**: the audience watches a live, publicly reachable website on
 screen (storefront + chatbot + real refund flow), not a terminal. They do not open the URL
 themselves.
-
-## Quick start (local, no cloud) -- offline UI development only
-
-```bash
-docker compose up -d --build
-open http://localhost:8000          # the storefront
-bash scripts/demo-beat1.sh          # standing access is the problem
-bash scripts/reset.sh               # back to a clean state
-```
-
-This trimmed local stack (Postgres + storefront + `agent-insecure`) is for iterating on the
-storefront UI and running beat 1 without any cloud account. **It cannot run beats 2, 3, or 4**
--- there is no SPIRE here and no Vault, so `agent-secure` has nothing to authenticate with.
-Vault Enterprise also needs a real license to even start, so there was never a zero-config
-local option for the secure path. Beats 2-4 are EKS-only; see below.
 
 ## The real thing: AWS EKS + self-managed Vault Enterprise + SPIRE
 
@@ -68,31 +55,42 @@ migration introduced.
 
 ## Agentic IAM (Agent Registry + RAR)
 
-With a real Enterprise license on a real cluster, `terraform/agentic-iam.tf` applies
-unconditionally as part of `scripts/01-provision.sh`. To re-run just its verification and the
-RAR empirical test on an existing stack:
+With a real Enterprise license on a real cluster, `terraform/agentic-iam.tf` registers **two**
+agents and applies unconditionally as part of `scripts/01-provision.sh`:
+
+- **`order-agent`** -- read-only, cannot issue refunds (PostgreSQL has no grant for it to).
+- **`refund-agent`** -- can look up orders and issue refunds.
+
+The customer never picks between them; `app/storefront/main.py` routes "secure" mode to
+whichever one fits the request automatically, defaulting to the read-only one. See
+`scripts/demo-beat4-agentic-iam.sh` for the live version of the contrast.
+
+To re-run just the verification, the RAR empirical test, and a ceiling-misconfiguration probe
+on an existing stack:
 
 ```bash
 bash scripts/04-verify-agentic-iam.sh
 ```
 
-That script confirms the Agent Registry and OAuth resource server paths are reachable, then
-runs the one real experiment this repo exists to answer: presents a bare Bearer JWT carrying
+That script confirms both Agent Registry registrations and the OAuth resource server path are
+reachable, then runs two real experiments: presents a bare Bearer JWT carrying
 `authorization_details` directly to a KV path, with two deliberately-wrong variants (wrong
 path, wrong capability), to find out empirically whether RAR is enforced outside a real
-OAuth/OBO exchange -- something nothing in HashiCorp's docs confirms either way. See
-`docs/RUNBOOK.md`'s "Agentic IAM" section for what's confirmed, and why real on-behalf-of
+OAuth/OBO exchange; and deliberately widens `order-agent`'s real policy to see whether the
+Agent Registry ceiling caps a normal token independent of RAR/OBO -- neither is something
+HashiCorp's docs confirm either way. See `docs/RUNBOOK.md`'s "Agentic IAM" section for what's
+confirmed, and why real on-behalf-of
 delegation (a different, human-approval-linking piece) isn't attempted at all.
 
 ## Layout
 
 | Path | What's there |
 |---|---|
-| `app/storefront/` | FastAPI storefront: catalog, orders, support chat, the Identity & Access panel |
+| `app/storefront/` | FastAPI storefront: catalog, orders, support chat, the live Security Flow panel |
 | `app/agent/` | The support agent, as one image running in two modes (`AGENT_MODE=insecure\|secure`) |
 | `app/db/` | Schema + seed data + the deliberately-bad `nimbus_app_legacy` role + the storefront's own least-privilege role |
 | `terraform/` | AWS (VPC/EKS/RDS/KMS) + self-managed Vault Enterprise (vault-helm) + AWS Load Balancer Controller + Vault config + Agentic IAM |
-| `k8s_manifests/` | SPIRE Helm values, storefront/agent Deployments, the public storefront Ingress |
+| `k8s_manifests/` | SPIRE Helm values, storefront/agent Deployments (`agent-insecure`, `agent-secure` = refund-agent, `order-agent`), the public storefront Ingress |
 | `scripts/` | Provisioning, Vault init, the go/no-go gates, the three demo beats, reset, teardown |
 | `docs/RUNBOOK.md` | Provisioning order, self-managed-Vault constraints, confirmed gotchas, cost |
 | `docs/TALK-NOTES.md` | The four-beat narrative script, stagecraft notes, prior art to cite |

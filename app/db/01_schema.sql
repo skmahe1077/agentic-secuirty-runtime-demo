@@ -1,4 +1,4 @@
--- Nimbus Store schema.
+-- Mahi Stores schema.
 --
 -- Deliberate split for the demo's identity story:
 --   products / orders / refunds  -- in scope for the support agent's Vault role

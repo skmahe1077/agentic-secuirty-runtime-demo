@@ -53,9 +53,10 @@ Switch the widget to `agent-secure`.
    countdown, which is most of what the decoded payload shows, in the medium the audience is
    already watching -- cutting this step saves a window switch at the exact moment the panel
    is most interesting.
-3. Ask it to refund order #1045. The **Identity** and **Auth** stages complete first (SPIRE,
-   then `auth/spiffe`), then **Credential** -- click it open to show the TTL ticking down from
-   180s, scope `orders:SELECT`, `refunds:INSERT`, `customers: ✗ denied`.
+3. Ask it to refund order #1045. The **Identity** and **Authenticate** stages complete first
+   (SPIRE, then `auth/spiffe`) -- **Approval** shows its dashed bypass arc instead of lighting
+   up, since £64 is under the £100 threshold -- then **Credential**: click it open to show the
+   TTL ticking down from 180s, scope `orders:SELECT`, `refunds:INSERT`, `customers: ✗ denied`.
 4. Ask for a different order's customer, or for another customer's PII directly -- denied,
    and say why: *this isn't an if-statement, PostgreSQL itself has no grant for this role on
    `customers`.*
@@ -94,15 +95,20 @@ Community/HCP-flexible build, and worth saying so if asked. This beat shows the 
 product this repo is named after, and it's the one beat where the audience hasn't seen the
 mechanism yet: **there are two agents behind "Zero-trust," not one.**
 
-1. `vault read agent-registry/registration/display-name/order-agent` and
-   `.../display-name/refund-agent` -- both are first-class, inventoried identities in Vault,
-   each with its own ceiling policy, not just tokens.
+1. Open the Security Flow tab -- the Identity column already shows **both** agents, live,
+   before a single message is sent: `order-agent` and `refund-agent`, each with its own real
+   ceiling-policy tag (`order-agent-ceiling` / `agent-ceiling`) read straight off Vault's Agent
+   Registry. Say the line: *"these are two first-class, inventoried identities in Vault, each
+   with its own ceiling policy -- not just tokens, and not just one agent."*
+   (`vault read agent-registry/registration/display-name/order-agent` in a presenter terminal
+   is the cross-check, not the primary proof -- the tag on the card already is.)
 2. In the chat, ask a plain status question ("where is order #1043") -- say the line: *"this
-   got routed to the read-only agent, automatically -- nobody picked it."* Click the Identity
-   stage: `spiffe_id` ends `.../sa/ai-order-agent`.
-3. In the **same conversation**, ask for a refund. Click Identity again: it's now
-   `.../sa/ai-support-agent-secure` -- a completely different workload picked up the thread,
-   because the task changed. The refund succeeds.
+   got routed to the read-only agent, automatically -- nobody picked it."* The `order-agent`
+   card lights up green; `refund-agent`'s card stays visibly present -- it's real and
+   registered -- but dim.
+3. In the **same conversation**, ask for a refund. Now `refund-agent`'s card lights up instead
+   -- a completely different workload picked up the thread, because the task changed. The
+   refund succeeds.
 4. **The point**: start a *new* thread, and ask for a refund worded so the router's keyword
    match misses (e.g. "can you sort out order #1042, it arrived damaged" -- no literal
    "refund"). It still gets denied, cleanly. Say the line: *"the router is a convenience, not

@@ -11,11 +11,12 @@ agent that issues refunds. Two versions of that agent run side by side:
   role with a 3-minute TTL, used once, then dead on command.
 
 A third beat shows a human approving a large refund; the storefront's **Security Flow** panel
--- a live, 6-stage view of Identity → Auth → Credential → Approval → Execute → Revoke, driven
-by the agent's own real events -- correlates the approver's name, the workload's SPIFFE ID, and
-the Vault lease in the Approval stage's detail drawer. (Vault's own audit log carries the
-identical three fields -- enabled and verified by `scripts/03-verify.sh`, but presenter-only,
-not shown on stage.)
+-- a live, dark stage-column diagram (Identity → Authenticate → Approval → Credential →
+Execute), driven entirely by the agents' own real events -- shows both registered agents side
+by side with their real Vault Agent Registry ceiling policy, and correlates the approver's
+name, the workload's SPIFFE ID, and the Vault lease in the Credential stage's detail drawer.
+(Vault's own audit log carries the identical three fields -- enabled and verified by
+`scripts/03-verify.sh`, but presenter-only, not shown on stage.)
 
 A fourth beat demonstrates the real **Vault Agentic IAM** feature this repo is named after
 (Agent Registry + RAR) -- no longer gated behind a hypothetical license: this stack runs
@@ -80,11 +81,19 @@ Two tabs, switched in the topbar:
 - **Shop** (default) -- a clean consumer storefront: a product catalog with real photos
   (`app/storefront/static/images/`, sourced from Wikimedia Commons and bundled locally --
   nothing hotlinked, so nothing can fail to load on venue Wi-Fi) and a floating **💬 AI
-  Assistant** chat widget, collapsed to a launcher by default. No demo chrome visible -- a real
-  shopper never sees a customer picker or a security panel.
+  Assistant** chat widget (with its own "Chatting as" customer picker, kept in sync with the
+  Security Flow tab's), collapsed to a launcher by default. Clicking a suggestion chip
+  ("Request a refund" / "Check my order status") without an order number asks for one via a
+  real follow-up turn, not a canned error. No other demo chrome visible -- a real shopper never
+  sees a security panel.
 - **Security Flow** -- the presenter/demo view: the "Shopping as" and "Support agent" controls
-  (switch customer, switch insecure/secure mode) plus the live 6-stage Security Flow panel
-  (Identity → Auth → Credential → Approval → Execute → Revoke) and the Activity log.
+  (switch customer, switch insecure/secure mode) plus a live, dark stage-column diagram
+  (Identity → Authenticate → Approval → Credential → Execute). Identity shows **both**
+  registered agents (`order-agent`, `refund-agent`) at once -- kept live via `/api/state`
+  polling, not just whichever handled the last turn -- each tagged with its real Agent Registry
+  ceiling policy. Real SVG connector lines link every card to the next (both agents converge
+  into Authenticate), a dashed bypass arc appears when a refund skips Approval (under the £100
+  threshold), and a dark terminal-style event stream replaces the old Activity log.
 
 The chat widget talks to whichever backend `app/storefront/main.py`'s `_resolve()` routes to --
 see "Agentic IAM" below for what that means once two agents exist.
@@ -163,9 +172,10 @@ delegation (a different, human-approval-linking piece) isn't attempted at all.
 - The storefront exposes unauthenticated `/api/admin/reset` and `/api/admin/revoke` endpoints
   (both buttons in the UI). The demo relies on the ALB's security-group IP allowlist, not
   application auth, to keep them presenter-only -- see `docs/RUNBOOK.md`.
-- A handful of chart/image specifics (the `vault-helm` version, the `hashicorp/vault-enterprise`
-  image tag, the AWS Load Balancer Controller chart version) are pinned to values that were not
-  confirmed against a live `helm search repo` at the time this was written -- confirm before the
-  first apply; `terraform init` fails loudly and immediately if any are wrong.
+- `scripts/01-provision.sh` has now been run successfully end-to-end against real AWS -- see
+  `docs/RUNBOOK.md`'s "Confirmed gotchas from the first real provisioning run" for the real bugs
+  that surfaced and were fixed (EKS addon ordering, SPIRE chart compatibility, a JWKS bundle
+  that silently broke every `auth/spiffe` login, and others). Read that section before the next
+  from-scratch provision.
 - In-cluster Vault traffic is unencrypted (`global.tlsDisable = true`) -- correct for this demo,
   not for production. See `docs/TALK-NOTES.md`'s "what's not real here."

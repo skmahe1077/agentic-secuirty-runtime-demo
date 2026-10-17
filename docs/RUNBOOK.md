@@ -122,6 +122,93 @@ against the self-managed cluster -- treat as warnings if you ever touch the rele
   uses its own dedicated `nimbus_storefront` role (`app/db/04_storefront_role.sql`) precisely
   so it doesn't go dark the moment rotation runs.
 
+## Confirmed gotchas from the first real provisioning run (2026-10-17)
+
+`scripts/01-provision.sh` had never been run end-to-end against real AWS before 2026-10-17.
+Running it surfaced real bugs, all fixed in this repo -- listed here so they don't get
+silently reintroduced:
+
+- **EKS addon ordering deadlock.** This EKS module sets `bootstrap_self_managed_addons =
+  false`, so nodes get NO default networking until the `vpc-cni`/`kube-proxy` addons install --
+  but the module's default addon ordering waits for the node group to succeed FIRST. Nodes can
+  never go `Ready` without CNI, so the node group times out waiting for nodes that can never
+  come up. Fix: `terraform/eks.tf` marks `vpc-cni`/`kube-proxy` `before_compute = true`.
+- **`gp2` isn't actually the cluster-default StorageClass.** EKS ships it, but without the
+  `storageclass.kubernetes.io/is-default-class` annotation -- any PVC that doesn't name a
+  `storageClassName` explicitly (Vault's own PVCs, SPIRE's) sits `Pending` forever. Fixed via a
+  `kubernetes_annotations` resource in `terraform/eks.tf`, not a manual `kubectl patch`.
+- **The `spiffe/spire` Helm chart has moved on from what this repo was originally written
+  against.** It now requires `global.spire.caSubject` (country/organization/commonName, no
+  default), the field is `jwtTTL` not `jwtTtl` (capitalization changed), and
+  `global.spire.recommendations.enabled = true` silently defaults `namespaceLayout` to `true`,
+  splitting server/agent across `spire-server`/`spire-system` namespaces instead of the single
+  `spire-mgmt` every script here assumes -- set `namespaceLayout: false` explicitly. See
+  `k8s_manifests/spire/values.yaml`.
+- **The `terraform-provider-vault` plugin crashes creating a second `vault_identity_entity`.**
+  A real, reproducible panic (`resource_identity_entity.go`) on the SECOND entity created in one
+  apply, not the first -- the entity is actually created in Vault despite the crash, just never
+  recorded in Terraform state. Recovery: `terraform import vault_identity_entity.<name> <entity
+  id from 'vault read identity/entity/name/<name>'>`, then re-apply.
+- **Docker images built on Apple Silicon need `--platform linux/amd64`** for these EKS nodes
+  (`t3.medium`, x86_64) -- a plain `docker build` produces an arm64 image that fails every pod
+  with `exec format error`. Also set `imagePullPolicy: Always` on every app Deployment: without
+  it, a node that already pulled a bad image under the same tag (a git-sha tag can repeat across
+  torn-down/rebuilt rehearsals) silently keeps serving it.
+- **`k8s_manifests/agent-secure/deployment.yaml`'s `VAULT_ROLE` was wrong** --
+  `ai-support-agent` instead of `ai-support-agent-secure` (missing the `-secure` suffix the
+  actually-registered SPIFFE role uses). Every refund silently failed at `auth/spiffe/login`
+  with no obvious connection to the typo in the error. Fixed; if refunds start failing with
+  "permission denied, on post .../auth/spiffe/login" again, check this env var first.
+- **`scripts/refresh-bundle.sh`'s JWKS bundle broke every real `auth/spiffe` login.** SPIRE's
+  `spire-server bundle show -format spiffe` returns BOTH the x509-svid CA key (no `kid` -- it's
+  for mTLS trust, not JWT signing) and the jwt-svid signing key. Vault's `auth/spiffe` `bundle`
+  config is JWT-only and its parser rejects the WHOLE bundle if any entry lacks a `kid`
+  ("keyID cannot be empty") -- every login failed, silently, because the only check that existed
+  (`03-verify.sh`'s "agent-secure reports a real SPIFFE identity") only read a locally-cached
+  SVID file, never actually exercised `auth/spiffe/login`. Fixed: `refresh-bundle.sh` now
+  filters to `"use": "jwt-svid"` keys only. If you ever see this error again, check this first,
+  not Vault's own config.
+- **Terraform's `-target` doesn't write pure-variable outputs.** An output that references only
+  `var.X` (no resource) never gets written to state during a targeted apply -- it's silently
+  absent until a full, untargeted apply succeeds, even though nothing about it actually depends
+  on anything untargeted. `terraform/outputs.tf`'s `vault_k8s_namespace` now references
+  `kubernetes_namespace.vault.metadata[0].name` instead of the bare variable, specifically so
+  Phase 2's targeted apply (which creates that resource) reliably populates it -- `scripts/
+  vault-init.sh` and `vault_env()` both need this output before Phase 5's full apply ever runs.
+- **`vault write key=value` can't express a list-of-objects field.** `04-verify-agentic-iam.sh`'s
+  RAR probe profile (`public_keys`, a list of `{key_id, pem}` objects) needs the real JSON body
+  piped to `vault write <path> -` over stdin -- the flat `key=value` CLI syntax only builds
+  lists from comma-separated primitives.
+- **Two `vault_oauth_resource_server_config_profile` resources can't share an `issuer_id`.**
+  The RAR probe profile originally reused `"spiffe://nimbus.demo"`, the same issuer as the real
+  `spire` profile -- Vault rejects the second registration outright. `mint_rar_jwt.py`'s probe
+  JWT now carries its own `iss` claim (`spiffe://nimbus.demo/rar-probe`) matching a
+  correspondingly distinct `issuer_id`.
+- **`identity_event()`'s one-shot flag never reset.** It was meant to announce the Security Flow
+  panel's Identity card once per chat TURN (so a multi-tool-call turn doesn't spam the log
+  twice), but the flag never reset between turns -- after a pod's first-ever conversation, no
+  later browser session would ever see that agent's Identity card light up again. Fixed:
+  `VaultSession.begin_turn()` / `StaticCredentialSession.begin_turn()`, called at the start of
+  every `handle_message()`/`handle_resume()`.
+- **`04-verify-agentic-iam.sh`'s misconfiguration test writes a hardcoded policy document
+  directly to Vault by name, independent of Terraform.** If `terraform/vault-config.tf`'s
+  `order_agent_policy` is ever edited without also updating this script's widen/revert heredocs,
+  running the script will silently overwrite the live policy back to a stale version --
+  Terraform state has no way to detect this drift, since the write bypasses the `vault_policy`
+  resource entirely. Confirmed the hard way: adding the Agent Registry read grant below, then
+  running this script, reverted it live under Terraform's nose. Keep the two in sync by hand.
+
+## Agent Registry on the storefront UI (2026-10-17)
+
+Each secure agent's real Vault policy now also grants read-only access to its OWN Agent
+Registry entry (`agent-registry/registration/display-name/{its own name}` -- see
+`terraform/vault-config.tf`), read opportunistically off its already-authenticated client
+(never forcing a fresh login just for this) and surfaced via its `/status` endpoint. The
+Security Flow panel's Identity cards show the real ceiling policy name as a tag (filtered to
+drop Vault's own automatic `default`/`default-ceiling`). This makes beat 4's `vault read
+agent-registry/registration/...` terminal step visible live in the browser instead -- keep the
+terminal command as a presenter-only cross-check, not the primary demonstration.
+
 ## Agentic IAM (Agent Registry + RAR) -- now real, not hypothetical
 
 HashiCorp's **Agentic IAM** (Agent Registry, Vault as an OAuth resource server, RFC 9396 Rich

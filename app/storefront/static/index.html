@@ -10,54 +10,39 @@
   <header class="topbar">
     <div class="wordmark">☁ Mahi Stores</div>
     <div class="topbar-controls">
-      <label class="field-inline">
-        Shopping as
-        <select id="customer-picker"></select>
-      </label>
-      <label class="field-inline">
-        Support agent
-        <select id="agent-picker">
-          <option value="insecure">Legacy (standing credential)</option>
-          <option value="secure" selected>Zero-trust (SPIFFE + Vault JIT)</option>
-        </select>
-      </label>
+      <div class="tab-switcher">
+        <button id="tab-btn-shop" class="tab-btn active" data-tab="shop" type="button">Shop</button>
+        <button id="tab-btn-flow" class="tab-btn" data-tab="flow" type="button">Security Flow</button>
+      </div>
       <button id="reset-btn" class="btn-ghost" title="Reset demo state">↺ Reset</button>
     </div>
   </header>
 
   <main class="layout">
-    <section class="shop">
+    <section id="tab-shop" class="tab-panel shop">
       <h2>Catalog</h2>
       <div id="products" class="product-grid"></div>
-
-      <h2>My Orders</h2>
-      <div id="orders" class="order-list"></div>
-
-      <h2>Support</h2>
-      <div class="chat-header">
-        <span class="chat-avatar">💬</span>
-        <div>
-          <div class="chat-title">Mahi Stores Assistant</div>
-          <div class="chat-status"><span class="status-dot good"></span>Online</div>
-        </div>
-      </div>
-      <div id="chat-log" class="chat-log"></div>
-      <div id="chat-suggestions" class="chat-suggestions"></div>
-      <form id="chat-form" class="chat-form">
-        <input id="chat-input" type="text" placeholder="e.g. Please refund order #1042" autocomplete="off" />
-        <button type="submit">Send</button>
-      </form>
-
-      <div id="approval-card" class="approval-card hidden">
-        <div class="approval-text"></div>
-        <div class="approval-row">
-          <input id="approver-name" type="text" placeholder="Your name" />
-          <button id="approve-btn">Approve</button>
-        </div>
-      </div>
     </section>
 
-    <aside class="panel">
+    <aside id="tab-flow" class="tab-panel panel hidden">
+      <!-- Demo-only controls: which customer is chatting, and which
+           security pattern (anti-pattern vs zero-trust). Not something a
+           real shopper would see -- that's why these live in this tab,
+           not the Shop tab. -->
+      <div class="demo-controls">
+        <label class="field-inline">
+          Shopping as
+          <select id="customer-picker"></select>
+        </label>
+        <label class="field-inline">
+          Support agent
+          <select id="agent-picker">
+            <option value="insecure">Legacy (standing credential)</option>
+            <option value="secure" selected>Zero-trust (SPIFFE + Vault JIT)</option>
+          </select>
+        </label>
+      </div>
+
       <h2>Security Flow</h2>
 
       <!-- Stage boxes are rendered entirely by app.js's STAGES config +
@@ -95,6 +80,50 @@
       </div>
     </aside>
   </main>
+
+  <!-- Floating support chat -- collapsed to a launcher by default; opens
+       into the full widget on click. app.js wires open/close/collapse;
+       the chat mechanics themselves (#chat-log, #chat-form, etc.) are
+       unchanged by living here instead of inline in the page. -->
+  <button id="chat-launcher" class="chat-launcher">
+    <span class="chat-launcher-icon">💬</span> AI Assistant
+  </button>
+
+  <div id="chat-widget" class="chat-widget hidden">
+    <div class="chat-widget-header">
+      <button id="chat-mute-btn" class="chat-icon-btn" title="Mute" type="button">🔊</button>
+      <span class="chat-widget-title">Chat</span>
+      <button id="chat-collapse-btn" class="chat-icon-btn" title="Minimize" type="button">⌄</button>
+      <button id="chat-close-btn" class="chat-icon-btn" title="Close" type="button">✕</button>
+    </div>
+
+    <div class="chat-widget-body">
+      <div class="chat-meta-row">
+        <span class="chat-meta-name">Mahi Stores Assistant</span>
+        <span class="chat-meta-time" id="chat-open-time"></span>
+      </div>
+
+      <div id="chat-log" class="chat-log"></div>
+      <div id="chat-suggestions" class="chat-suggestions"></div>
+
+      <div id="approval-card" class="approval-card hidden">
+        <div class="approval-text"></div>
+        <div class="approval-row">
+          <input id="approver-name" type="text" placeholder="Your name" />
+          <button id="approve-btn">Approve</button>
+        </div>
+      </div>
+
+      <div class="chat-consent">
+        This is a live demo. Chat messages drive this session only and aren't stored beyond it.
+      </div>
+    </div>
+
+    <form id="chat-form" class="chat-form">
+      <input id="chat-input" type="text" placeholder="Enter a message" autocomplete="off" />
+      <button type="submit">Send</button>
+    </form>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>

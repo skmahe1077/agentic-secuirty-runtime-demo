@@ -23,16 +23,16 @@ ON CONFLICT (customer_id) DO NOTHING;
 -- orders by id in turn. These exist to make the catalog grid look like a
 -- real shop's worth of inventory, not a 4-item demo fixture.
 INSERT INTO products (product_id, name, description, price_pence, stock) VALUES
-    (1,  'Mahi Wireless Headphones',  'Over-ear, 30h battery, active noise cancelling', 8900,  42),
-    (2,  'Mahi Mechanical Keyboard',  'Hot-swappable switches, USB-C',                   12500, 30),
-    (3,  'Mahi 27" Monitor',          '4K IPS, 144Hz',                                   45000, 12),
-    (4,  'Mahi USB-C Charger 65W',    'GaN, compact',                                     3200, 80),
-    (5,  'Mahi Wireless Mouse',       'Silent click, 6-month battery',                    3500, 65),
-    (6,  'Mahi Laptop Stand',         'Aluminium, folds flat',                            4200, 38),
-    (7,  'Mahi 1080p Webcam',         'Autofocus, built-in mic',                          5600, 24),
-    (8,  'Mahi Bluetooth Speaker',    'IPX7 water-resistant, 12h playback',               6900, 50),
-    (9,  'Mahi Laptop Sleeve 14"',    'Padded, water-repellent',                          2400, 90),
-    (10, 'Mahi USB-C Hub',            '7-in-1, HDMI + card reader',                       4800, 55)
+    (1,  'Wireless Headphones',  'Over-ear, 30h battery, active noise cancelling', 8900,  42),
+    (2,  'Mechanical Keyboard',  'Hot-swappable switches, USB-C',                   12500, 30),
+    (3,  '27" Monitor',          '4K IPS, 144Hz',                                   45000, 12),
+    (4,  'USB-C Charger 65W',    'GaN, compact',                                     3200, 80),
+    (5,  'Wireless Mouse',       'Silent click, 6-month battery',                    3500, 65),
+    (6,  'Laptop Stand',         'Aluminium, folds flat',                            4200, 38),
+    (7,  '1080p Webcam',         'Autofocus, built-in mic',                          5600, 24),
+    (8,  'Bluetooth Speaker',    'IPX7 water-resistant, 12h playback',               6900, 50),
+    (9,  'Laptop Sleeve 14"',    'Padded, water-repellent',                          2400, 90),
+    (10, 'USB-C Hub',            '7-in-1, HDMI + card reader',                       4800, 55)
 ON CONFLICT (product_id) DO NOTHING;
 
 INSERT INTO orders (order_id, customer_id, product_id, quantity, total_pence, status, placed_at) VALUES

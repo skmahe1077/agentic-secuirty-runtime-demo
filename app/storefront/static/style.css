@@ -57,9 +57,13 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 24px;
+  padding: 16px 24px;
   background: var(--surface-1);
   border-bottom: 1px solid var(--border);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  position: sticky;
+  top: 0;
+  z-index: 40;
 }
 .wordmark { font-size: 1.3rem; font-weight: 700; }
 .topbar-controls { display: flex; align-items: center; gap: 16px; }
@@ -74,15 +78,43 @@ select, input[type="text"] {
 }
 
 .layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
-  gap: 20px;
   padding: 20px 24px;
   max-width: 1400px;
   margin: 0 auto;
 }
-@media (max-width: 900px) {
-  .layout { grid-template-columns: 1fr; }
+
+/* ---- tabs -------------------------------------------------------------
+   Only one of #tab-shop / #tab-flow is visible at a time (toggled via
+   .hidden by app.js's switchTab()) -- the Security Flow tab is where the
+   demo-only customer/agent pickers live now, since a real shopper never
+   sees those. */
+.tab-switcher { display: flex; gap: 4px; background: var(--page-plane); border-radius: 8px; padding: 3px; }
+.tab-btn {
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 6px 14px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.tab-btn.active { background: var(--surface-1); color: var(--text-primary); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
+
+/* The Security Flow tab keeps the narrower, stepper-shaped width it was
+   designed for; the Shop tab uses the full container for the catalog
+   grid. */
+#tab-flow.panel { max-width: 480px; margin: 0 auto; }
+
+.demo-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 12px 14px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 10px;
 }
 
 h2 {
@@ -96,68 +128,127 @@ h2:first-child { margin-top: 0; }
 
 .product-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 16px;
 }
 .product-card {
   background: var(--surface-1);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 12px;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
+.product-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+}
+.product-image {
+  aspect-ratio: 4 / 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--page-plane);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+}
+.product-image img { width: 100%; height: 100%; object-fit: cover; }
+.product-body { padding: 14px; }
 .product-card .name { font-weight: 600; margin-bottom: 4px; }
-.product-card .price { color: var(--text-secondary); font-size: 0.9rem; }
-
-.order-list { display: flex; flex-direction: column; gap: 8px; }
-.order-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 14px;
-  font-size: 0.9rem;
+.product-card .description {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  margin-bottom: 10px;
+  min-height: 2.8em;
 }
-.order-row .status-badge {
-  font-size: 0.75rem;
-  font-weight: 600;
-  padding: 2px 8px;
+.product-card .price { font-weight: 700; font-size: 1.05rem; }
+
+/* ---- floating chat widget ------------------------------------------- */
+
+.chat-launcher {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
   border-radius: 999px;
+  border: none;
+  background: var(--text-primary);
+  color: var(--surface-1);
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
 }
-.status-delivered { background: var(--gridline); color: var(--text-secondary); }
-.status-shipped   { background: var(--gridline); color: var(--text-secondary); }
-.status-refunded  { background: color-mix(in srgb, var(--status-good) 18%, transparent); color: var(--success-text); }
+.chat-launcher.hidden { display: none; }
+.chat-launcher-icon { font-size: 1.1rem; }
 
-.chat-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-bottom: none;
-  border-radius: 10px 10px 0 0;
-}
-.chat-avatar { font-size: 1.2rem; }
-.chat-title { font-weight: 600; font-size: 0.9rem; }
-.chat-status { font-size: 0.75rem; color: var(--text-secondary); display: flex; align-items: center; }
-.chat-status .status-dot { margin-right: 5px; }
-
-.chat-log {
+.chat-widget {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 50;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  height: min(560px, calc(100vh - 48px));
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  max-height: 260px;
-  overflow-y: auto;
-  padding: 10px;
   background: var(--surface-1);
   border: 1px solid var(--border);
-  border-radius: 0;
+  border-radius: 14px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
 }
-.chat-bubble { max-width: 80%; padding: 8px 12px; border-radius: 10px; font-size: 0.9rem; line-height: 1.4; }
+.chat-widget.hidden { display: none; }
+
+.chat-widget-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--page-plane);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.chat-widget-title { font-weight: 700; flex: 1; }
+.chat-icon-btn {
+  background: none;
+  border: none;
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px;
+}
+.chat-icon-btn:hover { color: var(--text-primary); }
+
+.chat-widget-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chat-meta-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.8rem;
+}
+.chat-meta-name { font-weight: 600; }
+.chat-meta-time { color: var(--text-muted); }
+
+.chat-log { display: flex; flex-direction: column; gap: 8px; }
+.chat-bubble { max-width: 85%; padding: 8px 12px; border-radius: 10px; font-size: 0.9rem; line-height: 1.4; }
 .chat-bubble.user { align-self: flex-end; background: var(--gridline); }
-.chat-bubble.agent { align-self: flex-start; background: color-mix(in srgb, var(--status-good) 12%, var(--surface-1)); }
+.chat-bubble.agent { align-self: flex-start; background: color-mix(in srgb, var(--status-good) 12%, var(--surface-1)); border: 1px solid var(--border); }
 .chat-bubble.agent.denied { background: color-mix(in srgb, var(--status-critical) 14%, var(--surface-1)); }
 .chat-bubble.calling {
   align-self: flex-start;
@@ -167,24 +258,41 @@ h2:first-child { margin-top: 0; }
   padding: 4px 12px;
 }
 
+/* Vertically stacked, right-aligned, outlined -- not filled pill chips. */
 .chat-suggestions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 8px 2px;
-  border: 1px solid var(--border);
-  border-top: none;
-  border-radius: 0 0 10px 10px;
-  margin-bottom: 10px;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
 }
 .chip {
   font-family: inherit;
-  border: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: 1.5px solid var(--text-primary);
+  background: var(--surface-1);
+  color: var(--text-primary);
   cursor: pointer;
 }
-.chip:hover { background: var(--baseline); }
+.chip:hover { background: var(--gridline); }
 
-.chat-form { display: flex; gap: 8px; }
+.chat-consent {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-align: center;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.chat-form {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
 .chat-form input { flex: 1; }
 .chat-form input:disabled { opacity: 0.6; cursor: not-allowed; }
 .chat-form button:disabled { opacity: 0.5; cursor: not-allowed; }

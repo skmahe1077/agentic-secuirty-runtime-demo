@@ -96,7 +96,34 @@ function fmtTime(ts) {
   return new Date(ts * 1000).toLocaleTimeString([], { hour12: false });
 }
 
-// ---------- catalog / orders ----------
+// ---------- catalog ----------
+
+// Real product photos (Wikimedia Commons, freely licensed -- see
+// static/images/ATTRIBUTION.md), bundled locally and served as static
+// files -- not hotlinked to an external host. Keyed by a keyword matched
+// against the product name, not product_id, so new catalog rows pick up a
+// sensible image for free. Local, not a live external URL: nothing to
+// fail to load if the venue Wi-Fi drops mid-talk.
+const PRODUCT_IMAGES = {
+  headphone: "headphones.jpg",
+  keyboard: "keyboard.jpg",
+  monitor: "monitor.png",
+  charger: "charger.jpg",
+  mouse: "mouse.jpg",
+  stand: "stand.jpg",
+  webcam: "webcam.jpg",
+  speaker: "speaker.jpg",
+  sleeve: "sleeve.jpg",
+  hub: "hub.jpg",
+};
+
+function _imageFor(name) {
+  const lower = name.toLowerCase();
+  for (const [keyword, file] of Object.entries(PRODUCT_IMAGES)) {
+    if (lower.includes(keyword)) return `/static/images/${file}`;
+  }
+  return null;
+}
 
 async function loadCustomers() {
   const customers = await j("GET", "/api/customers");
@@ -118,22 +145,18 @@ async function loadProducts() {
   for (const p of products) {
     const card = document.createElement("div");
     card.className = "product-card";
-    card.innerHTML = `<div class="name">${p.name}</div><div class="price">${money(p.price_pence)} · ${p.stock} in stock</div>`;
+    const imgSrc = _imageFor(p.name);
+    const imageHtml = imgSrc
+      ? `<img src="${imgSrc}" alt="${p.name}" loading="lazy" />`
+      : "";
+    card.innerHTML = `
+      <div class="product-image">${imageHtml}</div>
+      <div class="product-body">
+        <div class="name">${p.name}</div>
+        <div class="description">${p.description}</div>
+        <div class="price">${money(p.price_pence)}</div>
+      </div>`;
     grid.appendChild(card);
-  }
-}
-
-async function loadOrders() {
-  const orders = await j("GET", `/api/orders?customer_id=${state.customerId}`);
-  const list = $("orders");
-  list.innerHTML = "";
-  for (const o of orders) {
-    const row = document.createElement("div");
-    row.className = "order-row";
-    row.innerHTML = `
-      <span>#${o.order_id} · ${o.product_name} · ${money(o.total_pence)}</span>
-      <span class="status-badge status-${o.status}">${o.status}</span>`;
-    list.appendChild(row);
   }
 }
 
@@ -158,7 +181,7 @@ function renderSuggestions() {
   for (const text of SUGGESTIONS) {
     const chip = document.createElement("button");
     chip.type = "button";
-    chip.className = "tag chip";
+    chip.className = "chip";
     chip.textContent = text;
     chip.addEventListener("click", () => {
       $("chat-input").value = text;
@@ -167,6 +190,34 @@ function renderSuggestions() {
     wrap.appendChild(chip);
   }
 }
+
+// ---------- floating widget open/close ----------
+
+let _chatOpened = false;
+function openChatWidget() {
+  $("chat-launcher").classList.add("hidden");
+  $("chat-widget").classList.remove("hidden");
+  if (!_chatOpened) {
+    _chatOpened = true;
+    $("chat-open-time").textContent = fmtTime(Date.now() / 1000);
+    addChatBubble("Hi! I'm the Mahi Stores assistant -- ask about an order, or request a refund.", "agent");
+  }
+  $("chat-input").focus();
+}
+function closeChatWidget() {
+  $("chat-widget").classList.add("hidden");
+  $("chat-launcher").classList.remove("hidden");
+}
+$("chat-launcher").addEventListener("click", openChatWidget);
+$("chat-close-btn").addEventListener("click", closeChatWidget);
+// No separate minimized state -- collapse just goes back to the launcher,
+// same as close.
+$("chat-collapse-btn").addEventListener("click", closeChatWidget);
+// Decorative only -- there is no audio anywhere in this demo to mute.
+$("chat-mute-btn").addEventListener("click", () => {
+  const btn = $("chat-mute-btn");
+  btn.textContent = btn.textContent.trim() === "🔊" ? "🔇" : "🔊";
+});
 
 // A loading-state label guessed from the customer's own message -- not
 // fabricated telemetry, just what's about to be asked for. The real
@@ -220,7 +271,6 @@ function handleAgentResponse(resp) {
     state.pendingApproval = { approval_id: resp.approval_id, thread_id: state.threadId };
     showApprovalCard(resp.approval_text || "This action needs human approval.");
   }
-  loadOrders();
 }
 
 function showApprovalCard(text) {
@@ -274,18 +324,31 @@ $("reset-btn").addEventListener("click", async () => {
   $("event-log").innerHTML = "";
   renderFlow();
   renderSuggestions();
-  loadOrders();
 });
 
 $("customer-picker").addEventListener("change", (e) => {
   state.customerId = parseInt(e.target.value, 10);
-  loadOrders();
 });
 $("agent-picker").addEventListener("change", (e) => {
   state.agent = e.target.value;
   resetFlowState();
   renderFlow();
 });
+
+// ---------- tabs ----------
+// "Shop" is the consumer-facing view; "Security Flow" holds the demo-only
+// controls (customer/agent pickers) plus the flow panel -- a real shopper
+// never sees those, so they don't live in the default view.
+
+function switchTab(name) {
+  for (const btn of document.querySelectorAll(".tab-btn")) {
+    btn.classList.toggle("active", btn.dataset.tab === name);
+  }
+  $("tab-shop").classList.toggle("hidden", name !== "shop");
+  $("tab-flow").classList.toggle("hidden", name !== "flow");
+}
+$("tab-btn-shop").addEventListener("click", () => switchTab("shop"));
+$("tab-btn-flow").addEventListener("click", () => switchTab("flow"));
 
 // ---------- Security Flow panel ----------
 
@@ -555,7 +618,6 @@ async function pollState() {
   renderSuggestions();
   await loadCustomers();
   await loadProducts();
-  await loadOrders();
   await pollState();
   renderFlow();
 })();

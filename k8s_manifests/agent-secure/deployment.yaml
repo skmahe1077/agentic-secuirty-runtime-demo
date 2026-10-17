@@ -20,6 +20,7 @@ spec:
       containers:
         - name: agent
           image: ${IMAGE_REGISTRY}/agent:${IMAGE_TAG}
+          imagePullPolicy: Always
           ports:
             - containerPort: 8000
           env:
@@ -36,9 +37,11 @@ spec:
             - name: VAULT_AUTH_MOUNT
               value: spiffe
             - name: VAULT_ROLE
-              value: ai-support-agent
+              value: ai-support-agent-secure
             - name: VAULT_ROLE_POLICY
               value: agent-support
+            - name: VAULT_REGISTRY_NAME
+              value: refund-agent
             - name: VAULT_DB_MOUNT
               value: database
             - name: VAULT_DB_ROLE

@@ -28,6 +28,7 @@ spec:
       containers:
         - name: agent
           image: ${IMAGE_REGISTRY}/agent:${IMAGE_TAG}
+          imagePullPolicy: Always
           ports:
             - containerPort: 8000
           env:
@@ -47,6 +48,8 @@ spec:
               value: ai-order-agent
             - name: VAULT_ROLE_POLICY
               value: order-agent-policy
+            - name: VAULT_REGISTRY_NAME
+              value: order-agent
             - name: VAULT_DB_MOUNT
               value: database
             - name: VAULT_DB_ROLE

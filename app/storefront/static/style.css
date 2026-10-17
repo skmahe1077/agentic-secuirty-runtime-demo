@@ -102,10 +102,11 @@ select, input[type="text"] {
 }
 .tab-btn.active { background: var(--surface-1); color: var(--text-primary); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
 
-/* The Security Flow tab keeps the narrower, stepper-shaped width it was
-   designed for; the Shop tab uses the full container for the catalog
-   grid. */
-#tab-flow.panel { max-width: 480px; margin: 0 auto; }
+/* The Security Flow tab is a wide, big-on-a-projector dashboard, not a
+   narrow stepper -- 5 stage columns need real estate, and this is the
+   panel shown live on stage. Matches the Shop tab's own container cap
+   (.layout's max-width) rather than a separate narrower one. */
+#tab-flow.panel { max-width: 1400px; margin: 0 auto; }
 
 .demo-controls {
   display: flex;
@@ -245,6 +246,9 @@ h2:first-child { margin-top: 0; }
 .chat-meta-name { font-weight: 600; }
 .chat-meta-time { color: var(--text-muted); }
 
+.chat-customer-row { justify-content: flex-start; }
+.chat-customer-row select { font-size: 0.85rem; }
+
 .chat-log { display: flex; flex-direction: column; gap: 8px; }
 .chat-bubble { max-width: 85%; padding: 8px 12px; border-radius: 10px; font-size: 0.9rem; line-height: 1.4; }
 .chat-bubble.user { align-self: flex-end; background: var(--gridline); }
@@ -366,92 +370,212 @@ h2:first-child { margin-top: 0; }
 .corr dt { color: var(--text-muted); }
 .corr dd { margin: 0; font-family: ui-monospace, monospace; word-break: break-all; }
 
-/* ---- Security Flow panel -------------------------------------------- */
+/* ---- Security Flow panel: dark stage-column diagram -------------------
+   A pulse travels card-to-card as real events arrive (app.js's
+   playTurnAnimation) -- a paced replay of the actual event sequence, not
+   a live network capture (the backend returns all of a turn's events in
+   one response, not a stream). Clicking a card opens the same detail
+   drawer the earlier stepper used.
 
-.flow {
+   .flow-dark redefines the same custom properties the rest of the panel
+   already uses (--surface-1, --border, --text-*, --status-*, etc.) to a
+   fixed dark palette, scoped to this panel only -- .stage-detail, .corr,
+   .meter, .scope-list, .tag, .demo-controls etc. below need no changes of
+   their own, they just inherit the override through normal CSS cascade. */
+.flow-dark {
+  --surface-1:       #121a2e;
+  --page-plane:      #0a0e1a;
+  --border:          rgba(255, 255, 255, 0.08);
+  --gridline:        #1e2740;
+  --baseline:        #2a3454;
+  --text-primary:    #e8edf7;
+  --text-secondary:  #9aa6c3;
+  --text-muted:      #6b7794;
+  --status-good:     #2ee6a6;
+  --status-warning:  #f5b942;
+  --status-serious:  #f5934e;
+  --status-critical: #f0556b;
+  --success-text:    #2ee6a6;
+  background: var(--page-plane);
+  color: var(--text-primary);
+  border-radius: 16px;
+  padding: 28px;
   display: flex;
   flex-direction: column;
-  position: relative;
+  gap: 22px;
 }
-.flow-stage {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 10px 12px 10px 34px;
-  position: relative;
-  cursor: pointer;
-  border-radius: 8px;
-  transition: background-color 0.15s;
+.flow-dark-header { display: flex; align-items: center; }
+.flow-dark-title { font-weight: 700; font-size: 1.7rem; display: flex; align-items: center; gap: 10px; }
+.flow-live-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--status-good);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--status-good) 70%, transparent);
+  display: inline-block;
 }
-.flow-stage:hover { background: var(--gridline); }
-.flow-stage.open { background: color-mix(in srgb, var(--text-primary) 6%, transparent); }
 
-/* connector line + numbered dot, stepper-style */
-.flow-stage::before {
-  content: "";
-  position: absolute;
-  left: 15px;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: var(--gridline);
+.stage-graph {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 18px;
+  /* Dedicated lane above the column headers for the bypass arc -- it must
+     never share vertical space with "N. Label" text (see
+     .bypass-arc-layer's matching height below). */
+  padding-top: 46px;
 }
-.flow-stage:first-child::before { top: 50%; }
-.flow-stage:last-child::before { bottom: 50%; }
-.flow-num {
-  position: absolute;
-  left: 7px;
-  top: 10px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--surface-1);
-  border: 2px solid var(--baseline);
-  color: var(--text-muted);
-  font-size: 0.68rem;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.stage-col {
+  position: relative;
   z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
-.flow-stage.complete .flow-num { border-color: var(--status-good); color: var(--status-good); background: color-mix(in srgb, var(--status-good) 14%, var(--surface-1)); }
-.flow-stage.absent .flow-num { border-color: var(--gridline); color: var(--baseline); }
+/* connector between columns */
+/* Real connector lines (app.js's drawConnectors), card to card -- not one
+   generic arrow per column gap. Identity's two agent cards each get their
+   own line into Vault, so the diagram shows both real registered agents
+   actually connecting to Authenticate. Sized to the full stage-graph
+   (not just the header lane, since lines run between cards at whatever
+   row each one sits in) and kept below the cards so lines appear to pass
+   behind them. */
+.connector-layer {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 0;
+}
+.connector-line {
+  fill: none;
+  stroke: var(--baseline);
+  stroke-width: 1.5;
+}
+.connector-arrowhead-fill { fill: var(--baseline); }
+.stage-col-head { display: flex; align-items: center; gap: 8px; }
+.stage-col-num {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  background: var(--gridline);
+  color: var(--text-muted);
+  font-size: 0.9rem; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.stage-col-label { font-weight: 600; font-size: 1.2rem; }
+/* Fills the rest of the column's height (grid rows stretch all columns
+   to match the tallest -- Identity's 2-card stack) and centers its
+   card(s) within it, so a column with one card lines up against the
+   vertical middle of Identity's stack instead of hugging the top. */
+.stage-col-cards { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 10px; }
 
-.flow-label { font-weight: 600; font-size: 0.9rem; }
-.flow-stage.absent .flow-label { color: var(--text-muted); }
-.flow-sub { font-size: 0.78rem; color: var(--text-secondary); word-break: break-word; }
-.flow-stage.absent .flow-sub { font-style: italic; }
+.flow-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 10px;
+  border: 1.5px solid var(--baseline);
+  background: var(--surface-1);
+  cursor: pointer;
+  transition: border-color 0.2s, background-color 0.2s, transform 0.15s, box-shadow 0.2s;
+}
+.flow-card-icon { font-size: 1.9rem; line-height: 1; margin-top: 1px; }
+.flow-card-label { font-weight: 600; font-size: 1.2rem; }
+.flow-card-sub { font-size: 0.95rem; color: var(--text-muted); line-height: 1.4; word-break: break-word; margin-top: 4px; }
+.flow-card-tag {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-family: ui-monospace, monospace;
+  background: var(--gridline);
+  color: var(--text-secondary);
+}
+.flow-card-tag.hidden { display: none; }
+
+.flow-card.hidden { display: none; }
+.flow-card.open { box-shadow: 0 0 0 2px color-mix(in srgb, var(--text-primary) 15%, transparent); }
+.flow-card.lit { border-color: var(--status-good); background: color-mix(in srgb, var(--status-good) 10%, var(--surface-1)); }
+/* a registered agent that's real but not the one handling this turn --
+   distinct from both "lit" (active) and the plain unlit default */
+.flow-card.registered { border-color: color-mix(in srgb, var(--status-good) 45%, var(--baseline)); }
+.flow-card.warning { border-color: var(--status-warning); background: color-mix(in srgb, var(--status-warning) 10%, var(--surface-1)); }
+.flow-card.critical { border-color: var(--status-critical); background: color-mix(in srgb, var(--status-critical) 10%, var(--surface-1)); }
+.flow-card.revoked { border-color: var(--baseline); background: var(--gridline); opacity: 0.7; }
+.flow-card.absent .flow-card-sub { font-style: italic; }
+.flow-card.pulse-hit { transform: scale(1.04); box-shadow: 0 0 10px color-mix(in srgb, var(--status-good) 50%, transparent); }
+
+.bypass-arc-layer {
+  position: absolute;
+  /* Lives entirely within .stage-graph's padding-top lane, above where
+     .stage-col-head starts -- never overlaps the "N. Label" row. */
+  top: 0; left: 0;
+  width: 100%; height: 40px;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 0;
+}
+.bypass-arc-layer path {
+  fill: none;
+  stroke: var(--status-warning);
+  stroke-width: 2;
+  stroke-dasharray: 5 4;
+}
+.bypass-arc-label {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--status-warning);
+  white-space: nowrap;
+  z-index: 2;
+}
+.bypass-arc-layer.hidden, .bypass-arc-label.hidden { display: none; }
+
+.graph-pulse {
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--status-good);
+  transform: translate(-50%, -50%);
+  transition: left 0.4s ease, top 0.4s ease;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--status-good) 60%, transparent);
+  z-index: 3;
+}
 
 .stage-detail {
   background: var(--surface-1);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 14px;
+  border-radius: 12px;
+  padding: 20px;
   position: relative;
 }
 .stage-detail-close {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: 14px;
+  right: 14px;
   background: none;
   border: none;
   color: var(--text-muted);
-  font-size: 1.1rem;
+  font-size: 1.3rem;
   cursor: pointer;
   line-height: 1;
   padding: 2px 6px;
 }
-.stage-detail-label { font-weight: 700; font-size: 1rem; margin-bottom: 10px; padding-right: 20px; }
+.stage-detail-label { font-weight: 700; font-size: 1.45rem; margin-bottom: 12px; padding-right: 24px; }
 .stage-detail-heading {
-  font-size: 0.68rem;
+  font-size: 0.82rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted);
-  margin: 10px 0 4px;
+  margin: 12px 0 5px;
 }
 .stage-detail-heading:first-of-type { margin-top: 0; }
-.stage-detail-body { font-size: 0.86rem; line-height: 1.45; }
+.stage-detail-body { font-size: 1.05rem; line-height: 1.55; }
 .stage-detail-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .tag {
   font-size: 0.72rem;
@@ -500,20 +624,49 @@ h2:first-child { margin-top: 0; }
 .scope-list li.denied { color: var(--status-critical); }
 .scope-list li.allowed { color: var(--success-text); }
 
-.event-log {
+.event-stream-wrap {
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: #05070f;
+}
+.event-stream-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border);
+}
+.term-dot { width: 11px; height: 11px; border-radius: 50%; }
+.term-dot-red { background: #f0556b; }
+.term-dot-yellow { background: #f5b942; }
+.term-dot-green { background: #2ee6a6; }
+.event-stream-title {
+  margin-left: 6px;
+  font-size: 0.92rem;
+  font-family: ui-monospace, monospace;
+  color: var(--text-muted);
+}
+.event-stream {
   list-style: none;
   margin: 0;
-  padding: 8px;
+  padding: 16px;
   max-height: 280px;
   overflow-y: auto;
   overflow-x: auto;
-  font-size: 0.78rem;
+  font-size: 0.96rem;
   font-family: ui-monospace, monospace;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  background: var(--page-plane);
-  border-radius: 8px;
+  gap: 5px;
 }
-.event-log li { display: flex; gap: 8px; align-items: flex-start; color: var(--text-secondary); white-space: nowrap; }
-.event-log time { color: var(--text-muted); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.stream-line { display: flex; gap: 8px; align-items: baseline; white-space: nowrap; color: var(--text-secondary); }
+.stream-time { color: var(--text-muted); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.stream-actor { flex-shrink: 0; }
+.stream-actor-agent { color: #6fb8ff; }
+.stream-actor-vault { color: var(--status-good); }
+.stream-actor-postgres { color: #c792ea; }
+.stream-line.good .stream-text { color: var(--status-good); }
+.stream-line.warning .stream-text { color: var(--status-warning); }
+.stream-line.critical .stream-text { color: var(--status-critical); }

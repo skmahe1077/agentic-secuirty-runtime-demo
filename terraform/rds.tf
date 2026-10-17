@@ -14,7 +14,7 @@ resource "aws_security_group" "rds" {
   vpc_id      = module.vpc.vpc_id
 
   ingress {
-    description     = "from EKS nodes -- covers both the storefront's own connection and Vault's database secrets engine, which now runs in-cluster and egresses the node ENI"
+    description     = "from EKS nodes -- covers both the storefront connection and Vault database secrets engine, which runs in-cluster and egresses the node ENI"
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"

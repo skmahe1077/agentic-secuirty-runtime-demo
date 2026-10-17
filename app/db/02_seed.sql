@@ -1,21 +1,21 @@
 -- Demo data for Mahi Stores.
 --
--- order #1042 (Alice, headphones, £89) is beat 1's refund.
--- order #1045 (Alice, charger x2, £64) is beat 2's refund -- deliberately a
--- DIFFERENT order than beat 1's, so scripts/demo-beat{1,2}.sh can run
+-- order #1042 (Idhazhini, headphones, £89) is beat 1's refund.
+-- order #1045 (Idhazhini, charger x2, £64) is beat 2's refund -- deliberately
+-- a DIFFERENT order than beat 1's, so scripts/demo-beat{1,2}.sh can run
 -- back-to-back without scripts/reset.sh in between and neither hits
 -- "already refunded." Both are under the £100 auto-approval threshold.
--- order #1046 (Bob, charger, £32) is the "wrong customer" refund both
+-- order #1046 (Ilan, charger, £32) is the "wrong customer" refund both
 -- beat 1 (succeeds -- the point) and beat 2 (denied -- the point) attempt
--- while chatting as Alice. Also under threshold, so the point stays
+-- while chatting as Idhazhini. Also under threshold, so the point stays
 -- overprivilege/ownership, not the approval gate.
--- order #1043 (Bob, keyboard, £125) and #1044 (Carol, monitor, £450) sit
+-- order #1043 (Ilan, keyboard, £125) and #1044 (Ruba, monitor, £450) sit
 -- above the threshold for exercising the approval flow itself.
 
 INSERT INTO customers (customer_id, name, email, phone) VALUES
-    (1, 'Alice Chen',   'alice@example.com',   '+44 7700 900001'),
-    (2, 'Bob Okafor',   'bob@example.com',     '+44 7700 900002'),
-    (3, 'Carol Novak',  'carol@example.com',   '+44 7700 900003')
+    (1, 'Idhazhini',  'idhazhini@example.com', '+44 7700 900001'),
+    (2, 'Ilan',       'ilan@example.com',      '+44 7700 900002'),
+    (3, 'Ruba',       'ruba@example.com',      '+44 7700 900003')
 ON CONFLICT (customer_id) DO NOTHING;
 
 -- Products 5-10 are additive only -- do not renumber 1-4, the orders below

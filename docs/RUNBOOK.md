@@ -167,15 +167,22 @@ has run** -- this was the single biggest unverified assumption in the whole repo
 license existed:
 
 ```
-4a (right path, right capability):  HTTP ___
-4b (wrong path):                    HTTP ___
-4c (wrong capability):              HTTP ___
+4a (right path, right capability):  HTTP 403 ("permission denied")
+4b (wrong path):                    HTTP 403 ("permission denied")
+4c (wrong capability):              HTTP 403 ("permission denied")
 ```
 
-If 4a succeeds and 4b/4c do not, RAR enforcement on a bare Bearer token outside any OBO
-exchange is real, and beat 4 can show it live. If all three behave identically, that's the
-answer too -- update `terraform/agentic-iam.tf`'s comments and `docs/TALK-NOTES.md`'s beat 4
-accordingly rather than leaving this section a hypothesis.
+**Confirmed on the real cluster (2026-10-17, Vault 2.2.0+ent):** all three behave identically --
+a bare Bearer JWT carrying `authorization_details`, presented directly to a KV path outside any
+real OAuth/OBO exchange, is refused regardless of whether its claimed path/capability are
+correct. RAR enforcement on this path is **not** real without an actual OBO flow; the
+`vault_oauth_resource_server_config_profile` resource configures a real profile, but presenting
+a token to it directly doesn't activate RAR-style path/capability checking the way the Terraform
+resource's naming might suggest. Beat 4 should NOT claim a live "right capability succeeds, wrong
+capability fails" contrast via this path -- that would be theater. What IS real and worth
+keeping on stage: the Agent Registry registrations themselves (two agents, two ceiling policies,
+both readable and both genuinely different in scope), and the ceiling-vs-normal-token result
+below.
 
 **The second, newer question**, now that two agents with two different ceilings exist: does
 the Agent Registry ceiling cap anything on a **normal** `auth/spiffe`-issued token,
@@ -188,14 +195,21 @@ the actual result here once the script has run:**
 
 ```
 5. order-agent's own token, with its real policy widened to allow refund-writer:
-   vault read database/creds/refund-writer -> SUCCEEDED / BLOCKED (circle one)
+   vault read database/creds/refund-writer -> SUCCEEDED
 ```
 
-If it **succeeded**, that matches the docs' own framing -- ceiling enforcement presumes an OBO
-flow, and a plain token request isn't one. Not a surprise, but now confirmed by this repo's own
-test rather than assumed from HashiCorp's docs. If it was **blocked**, that's genuinely new
-information: the ceiling is enforcing something independent of RAR/OBO, and
-`terraform/agentic-iam.tf`'s header comment should be corrected to say so.
+**Confirmed on the real cluster (2026-10-17, Vault 2.2.0+ent):** SUCCEEDED -- the widened real
+policy was honored and the Agent Registry ceiling did NOT block it on a normal
+`auth/spiffe`-issued token. This matches the docs' own framing (ceiling enforcement presumes an
+OBO flow, and a plain token request isn't one) -- not a surprise, but now confirmed by this
+repo's own test rather than assumed from HashiCorp's docs. **Practical consequence for the
+talk:** the Agent Registry's ceiling policy is not, by itself, a runtime enforcement backstop
+against an operator's ACL-policy mistake -- it constrains what an OBO/RAR-delegated request can
+do, not what the agent's own ordinary Vault token can do. The real backstop against the
+misconfiguration tested here is still PostgreSQL's own grants (Vault's ACL policy is the thing
+that actually widened; the DB role `order-reader` was never touched by this test and still has
+no write grant). Frame beat 4 around registration + ceiling-as-declared-intent, not
+ceiling-as-live-safety-net.
 
 ## Self-managed constraints that shape this build
 

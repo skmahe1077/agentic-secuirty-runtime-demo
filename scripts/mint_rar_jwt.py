@@ -29,6 +29,13 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 TRUST_DOMAIN = "nimbus.demo"
 SPIFFE_ID = f"spiffe://{TRUST_DOMAIN}/ns/agents/sa/ai-support-agent-secure"
+# A distinct issuer from the real "spire" profile's issuer_id
+# (spiffe://nimbus.demo) -- Vault picks which configured OAuth
+# resource-server profile to validate a bare Bearer token against by its
+# `iss` claim, and two profiles can't share an issuer_id. This JWT is
+# deliberately not a real SPIFFE JWT-SVID (see module docstring), so it
+# gets its own throwaway issuer rather than colliding with the real one.
+RAR_PROBE_ISSUER = f"spiffe://{TRUST_DOMAIN}/rar-probe"
 
 
 def ensure_keypair(keys_dir: Path) -> tuple[Path, Path]:
@@ -62,6 +69,7 @@ def mint(path: str, capabilities: list[str], ttl_seconds: int, out_path: Path, k
 
     now = int(time.time())
     claims = {
+        "iss": RAR_PROBE_ISSUER,
         "sub": SPIFFE_ID,
         "aud": "vault",
         "iat": now,

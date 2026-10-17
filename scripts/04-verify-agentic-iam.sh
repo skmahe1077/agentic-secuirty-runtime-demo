@@ -44,10 +44,22 @@ vault kv put kv/test-secret value=hello-from-vault-enterprise >/dev/null
 PUB_KEY_PEM="/tmp/rar-probe-keys/rar_probe_key.pub.pem"
 python3 "$REPO_ROOT/scripts/mint_rar_jwt.py" --path kv/data/test-secret --capabilities read \
   --out /tmp/rar_jwt_ok.token >/dev/null
-vault write sys/config/oauth-resource-server/rar-probe \
-  issuer_id="spiffe://nimbus.demo" use_jwks=false user_claim=sub audiences=vault \
-  public_keys="[{\"key_id\":\"rar-probe-key-0\",\"pem\":\"$(python3 -c "print(open('$PUB_KEY_PEM').read().replace(chr(10), chr(92)+'n'))")\"}]" \
-  optional_authorization_details=false >/dev/null
+# `vault write key=value` can't express a list-of-objects field like
+# public_keys -- it only builds lists from comma-separated primitives. Build
+# the real JSON body and feed it over stdin instead (the documented way to
+# pass a nested body to `vault write`).
+python3 -c '
+import json, sys
+pem = open(sys.argv[1]).read()
+print(json.dumps({
+    "issuer_id": "spiffe://nimbus.demo/rar-probe",
+    "use_jwks": False,
+    "user_claim": "sub",
+    "audiences": ["vault"],
+    "public_keys": [{"key_id": "rar-probe-key-0", "pem": pem}],
+    "optional_authorization_details": False,
+}))
+' "$PUB_KEY_PEM" | vault write sys/config/oauth-resource-server/rar-probe - >/dev/null
 
 log "   4a. mint a JWT granting read on kv/data/test-secret, present it directly"
 RAR_JWT_OK="$(cat /tmp/rar_jwt_ok.token)"
@@ -95,6 +107,9 @@ path "database/creds/refund-writer" {
 path "sys/leases/revoke" {
   capabilities = ["update"]
 }
+path "agent-registry/registration/display-name/order-agent" {
+  capabilities = ["read"]
+}
 EOF
 
   ORDER_AGENT_TOKEN="$(curl -s -H "Authorization: Bearer $ORDER_AGENT_SVID" \
@@ -117,12 +132,23 @@ EOF
   fi
 
   log "   reverting order-agent-policy to its narrow form"
+  # Must stay in sync with terraform/vault-config.tf's vault_policy.order_agent_policy --
+  # this overwrite is imperative (matches Vault's live policy document by
+  # name) and will silently drift from the Terraform-declared state if the
+  # two are ever edited independently. Confirmed the hard way: an earlier
+  # run of this script reverted to a stale copy that was missing a path
+  # Terraform had just added, and Terraform's own state had no way to
+  # detect the live drift since this writes by name, not through the
+  # vault_policy resource.
   vault policy write order-agent-policy - <<'EOF'
 path "database/creds/order-reader" {
   capabilities = ["read"]
 }
 path "sys/leases/revoke" {
   capabilities = ["update"]
+}
+path "agent-registry/registration/display-name/order-agent" {
+  capabilities = ["read"]
 }
 EOF
 fi

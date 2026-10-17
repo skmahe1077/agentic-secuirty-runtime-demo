@@ -40,6 +40,14 @@ class Settings:
     vault_db_mount: str
     vault_db_role: str
     svid_path: str
+    # The Agent Registry's display_name for this agent (terraform/
+    # agentic-iam.tf's vault_agent_registration) -- NOT the same string as
+    # agent_name/vault_role, which are naming decisions made independently
+    # over the life of this repo (refund-agent's VAULT_ROLE is
+    # "ai-support-agent-secure", its AGENT_NAME is "support-agent-secure",
+    # but its registry display_name is "refund-agent"). None for the
+    # insecure agent, which isn't registered at all.
+    vault_registry_name: str | None
 
     refund_approval_threshold_pence: int
 
@@ -66,6 +74,7 @@ def load_settings() -> Settings:
         vault_db_mount=os.environ.get("VAULT_DB_MOUNT", "database"),
         vault_db_role=os.environ.get("VAULT_DB_ROLE", "refund-writer"),
         svid_path=os.environ.get("SVID_PATH", "/svids/jwt_svid.token"),
+        vault_registry_name=os.environ.get("VAULT_REGISTRY_NAME"),
         refund_approval_threshold_pence=int(os.environ.get("REFUND_APPROVAL_THRESHOLD_PENCE", "10000")),
         agent_engine=os.environ.get("AGENT_ENGINE", "deterministic"),
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY"),

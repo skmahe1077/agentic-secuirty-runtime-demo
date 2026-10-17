@@ -25,6 +25,7 @@ spec:
       containers:
         - name: storefront
           image: ${IMAGE_REGISTRY}/storefront:${IMAGE_TAG}
+          imagePullPolicy: Always
           ports:
             - containerPort: 8000
           env:

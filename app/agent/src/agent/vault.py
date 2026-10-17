@@ -49,6 +49,11 @@ class StaticCredentialSession:
         self.settings = settings
         self._announced = False
 
+    def begin_turn(self) -> None:
+        """Identity is allowed to announce once per chat turn, not once
+        per pod lifetime -- see VaultSession.begin_turn()'s longer note."""
+        self._announced = False
+
     def identity_event(self) -> dict | None:
         if self._announced:
             return None
@@ -120,6 +125,24 @@ class VaultSession:
         # auth_event(), so the storefront's "Auth" stage reflects an actual
         # auth/spiffe round trip, not every credential request.
         self._last_login_fresh = False
+        # Agent Registry info (ceiling policy name) -- read once and
+        # cached, not re-read on every /status poll: it's provisioning-time
+        # fact (terraform/agentic-iam.tf), not something that changes
+        # mid-demo. None until the first successful read; False means "read
+        # attempted and failed," so we don't retry every poll forever.
+        self._registry_info: dict | None | bool = None
+
+    def begin_turn(self) -> None:
+        """Identity is allowed to announce once per chat turn, not once
+        per pod lifetime. `_identity_announced` previously never reset at
+        all, so after this pod's very first turn ever handled, no later
+        browser session -- on a long-running, repeatedly-demoed pod --
+        would see the Identity/Agent stage light up again. Call this once
+        at the start of handle_message()/handle_resume(), before any
+        action runs. `_last_login_fresh` needs no equivalent reset: it's
+        already driven by whether a real fresh Vault login just happened
+        (the cached client's token staleness), which recurs naturally."""
+        self._identity_announced = False
 
     # -- identity -----------------------------------------------------
 
@@ -263,6 +286,31 @@ class VaultSession:
             "message": f"revoked {lease_id} -- credential and its database role no longer exist",
         }
 
+    def _registry_info_now(self) -> dict | None:
+        """Agent Registry read -- own entry only (terraform/vault-config.tf
+        widened this agent's real policy with exactly one read-only path
+        for this). Deliberately never triggers a fresh Vault login just to
+        serve a /status poll: only reads opportunistically off an already-
+        authenticated client from a real credential-fetching action, so a
+        pod that hasn't handled a turn yet reports None here rather than
+        logging in purely to populate a status field."""
+        if self._registry_info is not None:
+            return self._registry_info or None
+        name = self.settings.vault_registry_name
+        if not name or self._client is None or not self._client.is_authenticated():
+            return None
+        try:
+            resp = self._client.read(f"agent-registry/registration/display-name/{name}")
+            data = (resp or {}).get("data") or {}
+            self._registry_info = {
+                "display_name": data.get("display_name"),
+                "ceiling_policies": data.get("ceiling_policies"),
+                "description": data.get("description"),
+            }
+        except Exception:  # noqa: BLE001 -- informational only, never block /status
+            self._registry_info = False
+        return self._registry_info or None
+
     def status(self) -> dict:
         identity = None
         try:
@@ -270,7 +318,13 @@ class VaultSession:
             identity = {"spiffe_id": claims.get("sub"), "svid_expires_at": claims.get("exp")}
         except OSError:
             pass
-        return {"available": True, "mode": "secure", "identity": identity, "lease": self._cached}
+        return {
+            "available": True,
+            "mode": "secure",
+            "identity": identity,
+            "lease": self._cached,
+            "registry": self._registry_info_now(),
+        }
 
     def forget(self) -> None:
         """Drops the cached credential AND the logged-in client, without

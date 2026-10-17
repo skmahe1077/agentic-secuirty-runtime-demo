@@ -23,11 +23,26 @@ SPIRE_SERVER_POD="$(kubectl -n spire-mgmt get pod -l app.kubernetes.io/name=serv
 [ -n "$SPIRE_SERVER_POD" ] || die "no spire-server pod found in namespace spire-mgmt"
 
 log "fetching bundle from $SPIRE_SERVER_POD"
+RAW_JWKS="$(mktemp)"
 kubectl -n spire-mgmt exec "$SPIRE_SERVER_POD" -- \
-  /opt/spire/bin/spire-server bundle show -format spiffe > "$OUT_JWKS"
+  /opt/spire/bin/spire-server bundle show -format spiffe > "$RAW_JWKS"
 
-[ -s "$OUT_JWKS" ] || die "bundle came back empty -- check spire-server is healthy"
-log "wrote $OUT_JWKS"
+[ -s "$RAW_JWKS" ] || die "bundle came back empty -- check spire-server is healthy"
+
+# SPIRE's combined SPIFFE bundle carries BOTH the x509-svid CA key (no "kid"
+# -- it's for mTLS trust, not JWT signing) and the jwt-svid signing key(s).
+# Vault's auth/spiffe `bundle` config is JWT-only and its parser rejects the
+# whole bundle if any entry lacks a "kid" ("keyID cannot be empty") -- keep
+# only the jwt-svid keys.
+python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["keys"] = [k for k in d["keys"] if k.get("use") == "jwt-svid"]
+assert d["keys"], "no jwt-svid keys found in the SPIRE bundle"
+json.dump(d, open(sys.argv[2], "w"))
+' "$RAW_JWKS" "$OUT_JWKS"
+rm -f "$RAW_JWKS"
+log "wrote $OUT_JWKS (jwt-svid keys only)"
 
 log "converting JWKS keys to individual PEM files for agentic-iam.tf's OAuth resource server profile"
 rm -rf "$OUT_KEYS_DIR"; mkdir -p "$OUT_KEYS_DIR"

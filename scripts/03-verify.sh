@@ -24,7 +24,7 @@ check() {
 }
 
 log "1. self-managed Vault Enterprise is up, unsealed, and licensed"
-check "Enterprise edition" bash -c 'vault status | grep -qi "HashiCorp Vault Enterprise"'
+check "Enterprise edition" bash -c 'vault status -format=json | python3 -c "import sys,json;assert \"+ent\" in json.load(sys.stdin)[\"version\"]"'
 check "unsealed" bash -c 'vault status -format=json | python3 -c "import sys,json;assert json.load(sys.stdin)[\"sealed\"] is False"'
 check "license not expired" bash -c '
   exp=$(vault read -format=json sys/license/status | python3 -c "import sys,json;print(json.load(sys.stdin)[\"data\"][\"autoloaded\"][\"expiration_time\"])")
@@ -65,7 +65,10 @@ warn "this is presenter-only verification -- the audit log itself is NOT shown o
 
 log "6. end-to-end: the secure agent actually logs in via auth/spiffe"
 check "agent-secure reports a real SPIFFE identity" bash -c '
-  resp=$(kubectl -n agents exec deploy/agent-secure -c agent -- curl -s localhost:8000/status)
+  # curl is not installed in the agent image (python:3.12-slim, kept minimal
+  # on purpose) -- urllib is already there, no image change needed for one
+  # verification check.
+  resp=$(kubectl -n agents exec deploy/agent-secure -c agent -- python3 -c "import urllib.request;print(urllib.request.urlopen(\"http://localhost:8000/status\").read().decode())")
   echo "$resp" | python3 -c "import sys,json;d=json.load(sys.stdin);assert d[\"identity\"] and d[\"identity\"][\"spiffe_id\"], d"
 '
 

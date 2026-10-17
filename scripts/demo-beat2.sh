@@ -31,13 +31,13 @@ kubectl -n agents exec deploy/agent-secure -c agent -- cat /svids/jwt_svid.token
   || warn "(no cluster reachable -- this step is EKS-only, see docs/RUNBOOK.md)"
 echo
 
-log "Alice asks to refund order #1045 -- a fresh, 3-minute credential gets minted for this"
+log "Idhazhini asks to refund order #1045 -- a fresh, 3-minute credential gets minted for this"
 RESP="$(chat '{"customer_id":1,"agent":"secure","message":"please refund order #1045","thread_id":"beat2"}')"
 echo "$RESP" | show
 LEASE_ID="$(echo "$RESP" | lease_id_from)"
 echo
 
-log "same agent, denied: order #1046 belongs to Bob, not the customer chatting"
+log "same agent, denied: order #1046 belongs to Ilan, not the customer chatting"
 chat '{"customer_id":1,"agent":"secure","message":"please refund order #1046","thread_id":"beat2"}' | show
 echo
 

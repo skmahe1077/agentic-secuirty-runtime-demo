@@ -174,6 +174,15 @@ resource "vault_policy" "agent_support" {
     path "auth/token/create" {
       capabilities = ["create", "update"]
     }
+    # Read-only, own-entry-only: lets the agent report its own real
+    # Agent Registry registration (ceiling policy name) via its /status
+    # endpoint, for the storefront's Identity card -- not a new standing
+    # credential anywhere else, just this agent's already-scoped token
+    # reading metadata about itself. See terraform/agentic-iam.tf's
+    # vault_agent_registration.agent_secure (display_name "refund-agent").
+    path "agent-registry/registration/display-name/refund-agent" {
+      capabilities = ["read"]
+    }
   EOT
 }
 
@@ -191,6 +200,10 @@ resource "vault_policy" "order_agent_policy" {
     }
     path "sys/leases/revoke" {
       capabilities = ["update"]
+    }
+    # Read-only, own-entry-only -- see agent_support's matching path above.
+    path "agent-registry/registration/display-name/order-agent" {
+      capabilities = ["read"]
     }
   EOT
 }

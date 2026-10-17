@@ -24,7 +24,13 @@ output "rds_master_password" {
 }
 
 output "vault_k8s_namespace" {
-  value = var.vault_namespace
+  # Deliberately a resource attribute, not the bare var.vault_namespace --
+  # scripts/lib/common.sh's tf_output needs this before Phase F's full
+  # apply ever runs (vault-init.sh, vault_env), and Terraform only writes
+  # an output during a `-target`ed apply if it's reachable from a targeted
+  # resource. A pure-variable output has no such edge and silently never
+  # gets written until a full, untargeted apply succeeds.
+  value = kubernetes_namespace.vault.metadata[0].name
 }
 
 output "vault_replicas" {

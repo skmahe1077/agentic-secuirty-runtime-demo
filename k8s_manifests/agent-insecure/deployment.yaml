@@ -16,6 +16,11 @@ spec:
       containers:
         - name: agent
           image: ${IMAGE_REGISTRY}/agent:${IMAGE_TAG}
+          # IfNotPresent would silently reuse a stale node-cached image on a
+          # same-tag rebuild (this demo always builds with git-sha tags that
+          # can repeat across torn-down/rebuilt rehearsals) -- always verify
+          # against the registry.
+          imagePullPolicy: Always
           ports:
             - containerPort: 8000
           env:

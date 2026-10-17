@@ -72,6 +72,7 @@ class LangChainEngine:
         return interrupts[0].value
 
     def handle_message(self, customer_id: int, message: str, thread_id: str) -> AgentTurnResult:
+        self.session.begin_turn()
         ctx = self._context_for(customer_id, thread_id)
         ctx.events.clear()
         result = self._agent.invoke(
@@ -95,6 +96,7 @@ class LangChainEngine:
         return AgentTurnResult(reply=reply, events=list(ctx.events))
 
     def handle_resume(self, thread_id: str, approved_by: str) -> AgentTurnResult:
+        self.session.begin_turn()
         ctx = self._contexts.get(thread_id)
         if ctx is None:
             return AgentTurnResult(reply="There's nothing awaiting approval.", events=[])

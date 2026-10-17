@@ -33,7 +33,7 @@ once and never rotated.
    `kubectl get secret db-static-creds -n nimbus -o jsonpath='{.data.password}' | base64 -d`
    (locally: it's just the `LegacyStaticPassword123!` in `app/db/03_legacy_role.sql`).
 2. Ask it to refund **your own** order (#1042) -- it works.
-3. Ask it to refund **someone else's** order (#1046, Bob's, while "shopping as" Alice) -- it
+3. Ask it to refund **someone else's** order (#1046, Ilan's, while "shopping as" Idhazhini) -- it
    also works. Say the line: *"the credential belongs to the app, not the task -- it has no
    idea whose order this is."*
 
@@ -109,11 +109,17 @@ mechanism yet: **there are two agents behind "Zero-trust," not one.**
    the security boundary -- even when it guesses wrong, PostgreSQL still won't let the
    read-only agent write a refund."* Run with `scripts/demo-beat4-agentic-iam.sh` as a
    rehearsal harness for all of the above.
-5. One sentence on the RAR mechanism underneath (presenter-only detail, not usually worth a
-   live click): a JWT carrying an `authorization_details` claim constraining it to one path and
-   one capability is enforced *on top of* ACL policy, not instead of it -- both have to agree.
-   (See `docs/RUNBOOK.md`'s recorded 4a/4b/4c HTTP codes, and the ceiling-misconfiguration
-   test's result, for exactly what's confirmed.)
+5. One sentence on what's confirmed and what isn't (presenter-only detail, not worth a live
+   click -- **do not claim this live**): a bare Bearer JWT carrying `authorization_details`,
+   presented directly outside a real OAuth/OBO exchange, was tested on this real cluster and
+   refused identically (HTTP 403) whether its path/capability claim was right or wrong -- RAR
+   enforcement on this path isn't real without an actual OBO flow. Separately, the Agent
+   Registry's ceiling policy did NOT block a normal `auth/spiffe` token after its real policy
+   was deliberately widened -- the ceiling constrains an OBO/RAR-delegated request, not an
+   agent's own ordinary token. (See `docs/RUNBOOK.md`'s recorded 4a/4b/4c HTTP codes and the
+   misconfiguration-test result.) What IS real and demo-able: the Agent Registry itself (two
+   first-class registrations, two genuinely different ceiling policies), and the PostgreSQL-
+   level denial in point 4 above.
 6. One sentence on what's deliberately NOT shown: real on-behalf-of human delegation needs an
    enterprise IdP doing RFC 8693 token exchange -- *"the ceiling policy and RAR constraint you
    just saw are the mechanics; OBO is the next piece, and it needs an IdP most of you don't

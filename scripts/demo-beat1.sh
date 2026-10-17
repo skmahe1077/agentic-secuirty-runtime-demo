@@ -22,11 +22,11 @@ kubectl get secret db-static-creds -n nimbus -o jsonpath='{.data.password}' 2>/d
   || warn "(not running on the real cluster -- see docker-compose.yml's agent-insecure service for the equivalent)"
 echo
 
-log "Alice asks to refund her own order #1042"
+log "Idhazhini asks to refund her own order #1042"
 chat '{"customer_id":1,"agent":"insecure","message":"please refund order #1042","thread_id":"beat1"}' | show
 echo
 
-log "...now the exact same chat, asked to refund order #1046 -- which belongs to Bob, not Alice"
+log "...now the exact same chat, asked to refund order #1046 -- which belongs to Ilan, not Idhazhini"
 chat '{"customer_id":1,"agent":"insecure","message":"please refund order #1046","thread_id":"beat1"}' | show
 echo
 warn "it worked. the credential belongs to the APP, not the task -- it has no idea whose order this is."

@@ -23,8 +23,20 @@ global:
     trustDomain: nimbus.demo
     recommendations:
       enabled: true # wires up k8s_psat node attestor + k8s workload attestor with sane defaults
+      # recommendations.enabled defaults namespaceLayout to true, which
+      # splits server/agent across spire-server/spire-system namespaces.
+      # This repo's scripts (refresh-bundle.sh) and docs hardcode a single
+      # spire-mgmt namespace -- keep that assumption true.
+      namespaceLayout: false
     namespaces:
       create: true
+    # Required by the chart (no default) -- this demo's SPIRE CA isn't a
+    # real PKI trust anchor beyond the cluster's own lifetime (torn down
+    # daily), so these are just a fixed, demo-appropriate subject.
+    caSubject:
+      country: "US"
+      organization: "Mahi Stores Demo"
+      commonName: "nimbus.demo"
   openshift: false
 
 spire-server:
@@ -47,7 +59,7 @@ spire-server:
           # 5 minutes -- SPIRE's own default, left alone deliberately so
           # the "short-lived credential" story is true by default rather
           # than tuned to look good on stage.
-          jwtTtl: "300s"
+          jwtTTL: "300s"
         # order-agent -- a genuinely separate identity, same namespace.
         # Matches terraform/variables.tf's order_agent_service_account and
         # vault-config.tf's spiffe_role_order_agent. The namespace boundary
@@ -63,4 +75,4 @@ spire-server:
           podSelector:
             matchLabels:
               app: ai-order-agent
-          jwtTtl: "300s"
+          jwtTTL: "300s"

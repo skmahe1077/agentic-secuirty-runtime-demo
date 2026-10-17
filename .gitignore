@@ -19,5 +19,9 @@ __pycache__/
 .env
 *.env.local
 
+# Vault Enterprise license -- goes into AWS Secrets Manager (see README's
+# "Prerequisites"), not git. Never commit this.
+*.hclic
+
 # OS noise
 .DS_Store

@@ -25,58 +25,68 @@
     </section>
 
     <aside id="tab-flow" class="tab-panel panel hidden">
-      <!-- Demo-only controls: which customer is chatting, and which
-           security pattern (anti-pattern vs zero-trust). Not something a
-           real shopper would see -- that's why these live in this tab,
-           not the Shop tab. -->
-      <div class="demo-controls">
-        <label class="field-inline">
-          Shopping as
-          <select id="customer-picker"></select>
-        </label>
-        <label class="field-inline">
-          Support agent
-          <select id="agent-picker">
-            <option value="insecure">Legacy (standing credential)</option>
-            <option value="secure" selected>Zero-trust (SPIFFE + Vault JIT)</option>
-          </select>
-        </label>
-      </div>
+      <div class="flow-dark">
+        <div class="flow-dark-header">
+          <span class="flow-dark-title">Security Flow <span class="flow-live-dot"></span> Live</span>
+        </div>
 
-      <h2>Security Flow</h2>
+        <!-- Demo-only controls: which customer is chatting, and which
+             security pattern (anti-pattern vs zero-trust). Not something a
+             real shopper would see -- that's why these live in this tab,
+             not the Shop tab. -->
+        <div class="demo-controls">
+          <label class="field-inline">
+            Shopping as
+            <select id="customer-picker"></select>
+          </label>
+          <label class="field-inline">
+            Support agent
+            <select id="agent-picker">
+              <option value="insecure">Legacy (standing credential)</option>
+              <option value="secure" selected>Zero-trust (SPIFFE + Vault JIT)</option>
+            </select>
+          </label>
+        </div>
 
-      <!-- Stage boxes are rendered entirely by app.js's STAGES config +
-           renderFlow() -- their content (what/why/tags) lives in one place
-           in the JS, not duplicated here. -->
-      <div class="flow" id="flow"></div>
+        <!-- Stage columns + cards + the animated pulse + bypass arc are
+             rendered entirely by app.js's STAGES config +
+             renderStageGraph()/playTurnAnimation() -- content (what/why/
+             tags) lives in one place in the JS, not duplicated here. -->
+        <div class="stage-graph" id="stage-graph"></div>
 
-      <div class="stage-detail hidden" id="stage-detail">
-        <button class="stage-detail-close" id="stage-detail-close" title="Close">×</button>
-        <div class="stage-detail-label" id="stage-detail-label"></div>
-        <div class="stage-detail-heading">What happens</div>
-        <div class="stage-detail-body" id="stage-detail-what"></div>
-        <div class="stage-detail-heading">Why it matters</div>
-        <div class="stage-detail-body" id="stage-detail-why"></div>
-        <div class="stage-detail-tags" id="stage-detail-tags"></div>
-        <div class="stage-detail-live hidden" id="stage-detail-live"></div>
-        <dl class="corr hidden" id="stage-detail-correlation">
-          <dt>Approved by</dt>  <dd id="corr-approver">—</dd>
-          <dt>Workload</dt>     <dd id="corr-spiffe">—</dd>
-          <dt>Credential</dt>   <dd id="corr-lease">—</dd>
-        </dl>
-        <div class="meter hidden" id="stage-detail-meter-wrap"><div class="meter-fill" id="lease-meter"></div></div>
-        <div class="stage-detail-heading">This run</div>
-        <ul class="stage-detail-log" id="stage-detail-log"></ul>
-        <button id="revoke-btn" class="btn-danger hidden">⨯ Revoke now</button>
-      </div>
+        <div class="stage-detail hidden" id="stage-detail">
+          <button class="stage-detail-close" id="stage-detail-close" title="Close">×</button>
+          <div class="stage-detail-label" id="stage-detail-label"></div>
+          <div class="stage-detail-heading">What happens</div>
+          <div class="stage-detail-body" id="stage-detail-what"></div>
+          <div class="stage-detail-heading">Why it matters</div>
+          <div class="stage-detail-body" id="stage-detail-why"></div>
+          <div class="stage-detail-tags" id="stage-detail-tags"></div>
+          <div class="stage-detail-live hidden" id="stage-detail-live"></div>
+          <dl class="corr hidden" id="stage-detail-correlation">
+            <dt>Approved by</dt>  <dd id="corr-approver">—</dd>
+            <dt>Workload</dt>     <dd id="corr-spiffe">—</dd>
+            <dt>Credential</dt>   <dd id="corr-lease">—</dd>
+          </dl>
+          <div class="meter hidden" id="stage-detail-meter-wrap"><div class="meter-fill" id="lease-meter"></div></div>
+          <div class="stage-detail-heading">This run</div>
+          <ul class="stage-detail-log" id="stage-detail-log"></ul>
+          <button id="revoke-btn" class="btn-danger hidden">⨯ Revoke now</button>
+        </div>
 
-      <div class="tile">
-        <!-- This is this app's own event feed, not Vault's audit log --
-             that distinction matters now that the real audit log is
-             configured (terraform/vault-config.tf's vault_audit) but
-             deliberately not shown on stage. -->
-        <div class="tile-label">Activity</div>
-        <ul class="event-log" id="event-log"></ul>
+        <!-- This app's own event feed, not Vault's audit log -- that
+             distinction matters now that the real audit log is configured
+             (terraform/vault-config.tf's vault_audit) but deliberately not
+             shown on stage. -->
+        <div class="event-stream-wrap">
+          <div class="event-stream-head">
+            <span class="term-dot term-dot-red"></span>
+            <span class="term-dot term-dot-yellow"></span>
+            <span class="term-dot term-dot-green"></span>
+            <span class="event-stream-title">security-event-stream</span>
+          </div>
+          <div class="event-stream" id="event-stream"></div>
+        </div>
       </div>
     </aside>
   </main>
@@ -102,6 +112,11 @@
         <span class="chat-meta-name">Mahi Stores Assistant</span>
         <span class="chat-meta-time" id="chat-open-time"></span>
       </div>
+
+      <label class="field-inline chat-customer-row">
+        Chatting as
+        <select id="chat-customer-picker"></select>
+      </label>
 
       <div id="chat-log" class="chat-log"></div>
       <div id="chat-suggestions" class="chat-suggestions"></div>

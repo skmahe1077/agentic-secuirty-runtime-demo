@@ -19,7 +19,7 @@ for e in d.get('events', []):
 "
 }
 
-log "Carol asks for a £450 refund on order #1044 -- well over the auto-approval limit"
+log "Ruba asks for a £450 refund on order #1044 -- well over the auto-approval limit"
 chat '{"customer_id":3,"agent":"secure","message":"please refund order #1044","thread_id":"beat3"}' | show
 echo
 

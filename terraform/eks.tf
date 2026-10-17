@@ -22,9 +22,15 @@ module "eks" {
   # never starts. coredns/kube-proxy/vpc-cni are listed explicitly so
   # setting `addons` at all doesn't silently displace EKS's own defaults.
   addons = {
-    coredns    = {}
-    kube-proxy = {}
-    vpc-cni    = {}
+    coredns = {}
+    # vpc-cni and kube-proxy must install *before* the node group, not after:
+    # bootstrap_self_managed_addons = false (this module's default) means EKS
+    # provides no default networking at all, so without before_compute the
+    # module's normal addon ordering (depends_on = [module.eks_managed_node_group])
+    # creates a deadlock -- nodes can never go Ready without CNI, and the addon
+    # that provides CNI waits for the node group to succeed first.
+    kube-proxy = { before_compute = true }
+    vpc-cni    = { before_compute = true }
     aws-ebs-csi-driver = {
       service_account_role_arn = module.ebs_csi_irsa.iam_role_arn
     }
@@ -42,6 +48,25 @@ module "eks" {
   tags = {
     Project = var.name
   }
+}
+
+# The in-tree "gp2" StorageClass that ships with every EKS cluster is NOT
+# marked as the cluster default (no storageclass.kubernetes.io/is-default-class
+# annotation) despite what eks.tf's addons comment above assumes -- without
+# this, any PVC that doesn't name a storageClassName explicitly (Vault's own
+# two PVCs, SPIRE's spire-data PVC) sits Pending forever with "no storage
+# class is set".
+resource "kubernetes_annotations" "gp2_default" {
+  api_version = "storage.k8s.io/v1"
+  kind        = "StorageClass"
+  metadata {
+    name = "gp2"
+  }
+  annotations = {
+    "storageclass.kubernetes.io/is-default-class" = "true"
+  }
+  force     = true
+  depends_on = [module.eks]
 }
 
 module "ebs_csi_irsa" {

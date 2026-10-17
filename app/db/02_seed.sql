@@ -32,7 +32,11 @@ INSERT INTO products (product_id, name, description, price_pence, stock) VALUES
     (7,  '1080p Webcam',         'Autofocus, built-in mic',                          5600, 24),
     (8,  'Bluetooth Speaker',    'IPX7 water-resistant, 12h playback',               6900, 50),
     (9,  'Laptop Sleeve 14"',    'Padded, water-repellent',                          2400, 90),
-    (10, 'USB-C Hub',            '7-in-1, HDMI + card reader',                       4800, 55)
+    (10, 'USB-C Hub',            '7-in-1, HDMI + card reader',                       4800, 55),
+    (11, 'iPhone 18 Pro',        'Titanium, 256GB',                                 99900, 20),
+    (12, 'MacBook Air',          '15", M-series chip',                             129900, 15),
+    (13, 'AirPods Pro',          'Active noise cancelling, USB-C case',             22900, 60),
+    (14, 'Apple Watch',          'GPS, 45mm',                                       39900, 25)
 ON CONFLICT (product_id) DO NOTHING;
 
 INSERT INTO orders (order_id, customer_id, product_id, quantity, total_pence, status, placed_at) VALUES

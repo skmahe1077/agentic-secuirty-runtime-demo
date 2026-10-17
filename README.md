@@ -10,7 +10,7 @@ agent that issues refunds. Two versions of that agent run side by side:
   token via the native `auth/spiffe` method, which mints a database credential scoped to one
   role with a 3-minute TTL, used once, then dead on command.
 
-A third beat shows a human approving a large refund; the storefront's **Security Flow** panel
+A third beat shows a human approving a large refund; the storefront's **Control Room** panel
 -- a live, dark stage-column diagram (Identity → Authenticate → Approval → Credential →
 Execute), driven entirely by the agents' own real events -- shows both registered agents side
 by side with their real Vault Agent Registry ceiling policy, and correlates the approver's
@@ -82,11 +82,11 @@ Two tabs, switched in the topbar:
   (`app/storefront/static/images/`, sourced from Wikimedia Commons and bundled locally --
   nothing hotlinked, so nothing can fail to load on venue Wi-Fi) and a floating **💬 AI
   Assistant** chat widget (with its own "Chatting as" customer picker, kept in sync with the
-  Security Flow tab's), collapsed to a launcher by default. Clicking a suggestion chip
+  Control Room tab's), collapsed to a launcher by default. Clicking a suggestion chip
   ("Request a refund" / "Check my order status") without an order number asks for one via a
   real follow-up turn, not a canned error. No other demo chrome visible -- a real shopper never
   sees a security panel.
-- **Security Flow** -- the presenter/demo view: the "Shopping as" and "Support agent" controls
+- **Control Room** -- the presenter/demo view: the "Shopping as" and "Support agent" controls
   (switch customer, switch insecure/secure mode) plus a live, dark stage-column diagram
   (Identity → Authenticate → Approval → Credential → Execute). Identity shows **both**
   registered agents (`order-agent`, `refund-agent`) at once -- kept live via `/api/state`
@@ -158,7 +158,7 @@ delegation (a different, human-approval-linking piece) isn't attempted at all.
 
 | Path | What's there |
 |---|---|
-| `app/storefront/` | FastAPI storefront: Shop/Security Flow tabs, catalog with local product photos, floating AI Assistant chat widget, the live Security Flow panel |
+| `app/storefront/` | FastAPI storefront: Shop/Control Room tabs, catalog with local product photos, floating AI Assistant chat widget, the live Control Room panel |
 | `app/agent/` | The support agent, as one image running in two modes (`AGENT_MODE=insecure\|secure`) |
 | `app/db/` | Schema + seed data + the deliberately-bad `nimbus_app_legacy` role + the storefront's own least-privilege role |
 | `terraform/` | AWS (VPC/EKS/RDS/KMS) + self-managed Vault Enterprise (vault-helm) + AWS Load Balancer Controller + Vault config + Agentic IAM |

@@ -15,6 +15,16 @@ this is a demo app for a fictional store.
 | speaker.jpg    | UE Boom 2.jpg |
 | sleeve.jpg     | Laptop bag.jpg |
 | hub.jpg        | USB hub Gembird.jpg |
+| iphone.jpg     | Apple iPhone.jpg |
+| macbook.jpg    | MacBook Air black.jpg |
+| airpods.jpg    | AirPods Pro (2nd generation).jpg |
+| applewatch.jpg | Apple Watch Sport.jpg |
+
+"iPhone 18 Pro"/"MacBook Air"/"AirPods Pro"/"Apple Watch" are demo catalog
+labels, not claims about a specific real current model -- same generic-
+category-photo convention as the rest of this list, just a well-known
+brand this time. Not affiliated with or endorsed by Apple Inc.; Mahi
+Stores is a fictional demo storefront.
 
 Full details (author, exact license) at
 https://commons.wikimedia.org/wiki/File:<title>, substituting the Commons

@@ -101,12 +101,12 @@ against the self-managed cluster -- treat as warnings if you ever touch the rele
 - **Vault token `display_name` sanitizes `:` and `/` into `-`.** A SPIFFE ID in
   `display_name` renders as `spiffe---nimbus-demo-ns-...` -- recognizable, not exact. Use
   `auth.metadata` for anything that needs to be literal (a slide, a query result, the
-  storefront's Security Flow panel's Approval stage).
+  storefront's Control Room panel's Approval stage).
 - **A human-approved action's child token (`auth/token/create`) does not inherit the parent's
   identity.** Without deliberately copying `spiffe_id` into the child's `meta` and setting its
   `display_name` (see `vault.py`'s `VaultSession.get_db_credentials`), the audit entry for an
   approved refund shows only the approval fields and a generic "token-token" -- losing the
-  "which workload" half of beat 3's claim, and leaving the Security Flow panel's Approval
+  "which workload" half of beat 3's claim, and leaving the Control Room panel's Approval
   stage with nothing to correlate.
 - **An agent's in-memory credential cache does not know about out-of-band revocations.**
   `scripts/reset.sh` calls `vault lease revoke -prefix database/creds/` directly; without also
@@ -184,7 +184,7 @@ silently reintroduced:
   `spire` profile -- Vault rejects the second registration outright. `mint_rar_jwt.py`'s probe
   JWT now carries its own `iss` claim (`spiffe://nimbus.demo/rar-probe`) matching a
   correspondingly distinct `issuer_id`.
-- **`identity_event()`'s one-shot flag never reset.** It was meant to announce the Security Flow
+- **`identity_event()`'s one-shot flag never reset.** It was meant to announce the Control Room
   panel's Identity card once per chat TURN (so a multi-tool-call turn doesn't spam the log
   twice), but the flag never reset between turns -- after a pod's first-ever conversation, no
   later browser session would ever see that agent's Identity card light up again. Fixed:
@@ -204,7 +204,7 @@ Each secure agent's real Vault policy now also grants read-only access to its OW
 Registry entry (`agent-registry/registration/display-name/{its own name}` -- see
 `terraform/vault-config.tf`), read opportunistically off its already-authenticated client
 (never forcing a fresh login just for this) and surfaced via its `/status` endpoint. The
-Security Flow panel's Identity cards show the real ceiling policy name as a tag (filtered to
+Control Room panel's Identity cards show the real ceiling policy name as a tag (filtered to
 drop Vault's own automatic `default`/`default-ceiling`). This makes beat 4's `vault read
 agent-registry/registration/...` terminal step visible live in the browser instead -- keep the
 terminal command as a presenter-only cross-check, not the primary demonstration.
@@ -383,7 +383,7 @@ it elapses -- that's expected, not a leak.
    500 -- proves the InsufficientPrivilege catch in `actions.py`'s `issue_refund` actually
    fires.
 6. On the ALB URL: refund an order through the chatbot as an approved action, and confirm the
-   Security Flow panel's **Approval** stage shows the approver, SPIFFE ID, and lease ID
+   Control Room panel's **Approval** stage shows the approver, SPIFFE ID, and lease ID
    together -- and that it persists after a subsequent revoke of the Credential stage (the
    credential is ephemeral, the record of who authorized it is not).
 7. Confirm the ALB security-group allowlist works in both directions: the site loads from the

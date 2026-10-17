@@ -17,7 +17,7 @@ not just a slide claim:
 | **A practical architecture for registering agents** | SPIRE's `ClusterSPIFFEID`s (`k8s_manifests/spire/values.yaml`) assign a SPIFFE identity to each agent pod by namespace + service account -- the identity exists before the agent ever calls Vault, not minted on the fly. Beat 4 adds Vault's own literal **Agent Registry**: `vault read agent-registry/registration/display-name/order-agent` and `.../refund-agent` show two first-class, inventoried identities, each with its own ceiling policy -- not just tokens, and not just one agent. |
 | **Enforcing policy at every tool or API call** | Beat 2's scope tile: `orders:SELECT`, `refunds:INSERT` allowed, `customers` denied -- enforced by PostgreSQL grants on a Vault-issued role, re-checked on every query, not cached as a one-time login decision. |
 | **Connecting human intent to agent action** | Beat 3: the refund tool call interrupts for approval; the resulting Vault child token carries the approver's name as token metadata, so the *action* and the *approval* are the same auditable event, not two separate logs to correlate by hand. |
-| **Building audit-ready controls across Kubernetes, cloud-native, and hybrid environments** | Kubernetes = EKS running SPIRE, both agents, **and Vault itself** (Raft + KMS auto-unseal); cloud-native = Vault's dynamic credentials and AWS KMS; hybrid = the storefront's RDS connection crossing both. The **Security Flow panel's Approval stage** is the "audit-ready" proof point: after an approved refund its detail drawer shows the approver's name, the workload's SPIFFE ID, and the Vault lease id **together** -- and it stays complete after the Credential stage is revoked, because the credential is ephemeral and the record of who authorized it is not. Vault's own audit log carries the identical three fields on the same request and is verified by `scripts/03-verify.sh`; it is deliberately **not** shown on stage. |
+| **Building audit-ready controls across Kubernetes, cloud-native, and hybrid environments** | Kubernetes = EKS running SPIRE, both agents, **and Vault itself** (Raft + KMS auto-unseal); cloud-native = Vault's dynamic credentials and AWS KMS; hybrid = the storefront's RDS connection crossing both. The **Control Room panel's Approval stage** is the "audit-ready" proof point: after an approved refund its detail drawer shows the approver's name, the workload's SPIFFE ID, and the Vault lease id **together** -- and it stays complete after the Credential stage is revoked, because the credential is ephemeral and the record of who authorized it is not. Vault's own audit log carries the identical three fields on the same request and is verified by `scripts/03-verify.sh`; it is deliberately **not** shown on stage. |
 
 Keep this table in view when cutting slides -- each promise should land on-screen as something
 that actually happened in the browser a moment earlier, not as a bullet point asserted on its
@@ -48,7 +48,7 @@ Switch the widget to `agent-secure`.
    nothing. No standing credential exists to find. (Presenter terminal -- "there is no secret
    in this pod" cannot be shown by a UI that only renders what the agent reports.)
 2. *(Optional -- consider cutting.)* `cat /svids/jwt_svid.token`, decode the payload: `sub` is
-   the full SPIFFE ID, `aud: vault`, `exp` five minutes out. The Security Flow panel's
+   the full SPIFFE ID, `aud: vault`, `exp` five minutes out. The Control Room panel's
    **Identity** stage, clicked open, already shows `spiffe_id` plus a live SVID expiry
    countdown, which is most of what the decoded payload shows, in the medium the audience is
    already watching -- cutting this step saves a window switch at the exact moment the panel
@@ -60,7 +60,7 @@ Switch the widget to `agent-secure`.
 4. Ask for a different order's customer, or for another customer's PII directly -- denied,
    and say why: *this isn't an if-statement, PostgreSQL itself has no grant for this role on
    `customers`.*
-5. **The money shot**: click the **Credential** stage in the Security Flow panel, then
+5. **The money shot**: click the **Credential** stage in the Control Room panel, then
    **Revoke now** in its detail drawer. Say *"this happens automatically in three minutes --
    forcing it now so the point lands before we move on."* Same query, now fails. `pg_roles`
    has zero `v-%` rows, and the Credential stage's live countdown flips to "revoked."
@@ -78,7 +78,7 @@ you don't.
    shows "awaiting approval."
 2. Approve it, by name, in the approval card.
 3. The agent proceeds under a **child Vault token** carrying the approval as token metadata.
-4. Click the **Approval** stage in the Security Flow panel: its detail drawer now shows the
+4. Click the **Approval** stage in the Control Room panel: its detail drawer now shows the
    approver, SPIFFE ID, and lease id together. Say the line: *"the credential is gone in three
    minutes -- this record is not."* (Vault's own audit log carries the identical three fields
    on this request -- presenter-only verification via `scripts/03-verify.sh`, not shown on
@@ -95,7 +95,7 @@ Community/HCP-flexible build, and worth saying so if asked. This beat shows the 
 product this repo is named after, and it's the one beat where the audience hasn't seen the
 mechanism yet: **there are two agents behind "Zero-trust," not one.**
 
-1. Open the Security Flow tab -- the Identity column already shows **both** agents, live,
+1. Open the Control Room tab -- the Identity column already shows **both** agents, live,
    before a single message is sent: `order-agent` and `refund-agent`, each with its own real
    ceiling-policy tag (`order-agent-ceiling` / `agent-ceiling`) read straight off Vault's Agent
    Registry. Say the line: *"these are two first-class, inventoried identities in Vault, each

@@ -12,7 +12,7 @@
     <div class="topbar-controls">
       <div class="tab-switcher">
         <button id="tab-btn-shop" class="tab-btn active" data-tab="shop" type="button">Shop</button>
-        <button id="tab-btn-flow" class="tab-btn" data-tab="flow" type="button">Security Flow</button>
+        <button id="tab-btn-flow" class="tab-btn" data-tab="flow" type="button">Control Room</button>
       </div>
       <button id="reset-btn" class="btn-ghost" title="Reset demo state">↺ Reset</button>
     </div>
@@ -27,7 +27,7 @@
     <aside id="tab-flow" class="tab-panel panel hidden">
       <div class="flow-dark">
         <div class="flow-dark-header">
-          <span class="flow-dark-title">Security Flow <span class="flow-live-dot"></span> Live</span>
+          <span class="flow-dark-title">Control Room <span class="flow-live-dot"></span> Live</span>
         </div>
 
         <!-- Demo-only controls: which customer is chatting, and which
@@ -46,6 +46,22 @@
               <option value="secure" selected>Zero-trust (SPIFFE + Vault JIT)</option>
             </select>
           </label>
+        </div>
+
+        <!-- Order history: who ordered what, with the order number -- a
+             presenter reference for picking a customer/order combo live,
+             not something a real shopper would see across other
+             customers' orders. Same reasoning as the demo-controls above.
+             Populated from the real /api/orders data (app.js's
+             loadOrderHistory()). -->
+        <div class="order-history-wrap">
+          <div class="order-history-head">Order History</div>
+          <table class="order-history">
+            <thead>
+              <tr><th>Order</th><th>Customer</th><th>Product</th><th>Qty</th><th>Total</th><th>Status</th></tr>
+            </thead>
+            <tbody id="order-history-body"></tbody>
+          </table>
         </div>
 
         <!-- Stage columns + cards + the animated pulse + bypass arc are
@@ -116,6 +132,13 @@
       <label class="field-inline chat-customer-row">
         Chatting as
         <select id="chat-customer-picker"></select>
+      </label>
+      <label class="field-inline chat-customer-row">
+        Support agent
+        <select id="chat-agent-picker">
+          <option value="insecure">Legacy (standing credential)</option>
+          <option value="secure" selected>Zero-trust (SPIFFE + Vault JIT)</option>
+        </select>
       </label>
 
       <div id="chat-log" class="chat-log"></div>

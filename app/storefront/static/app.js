@@ -19,7 +19,7 @@
 // Every event also carries `ts` (epoch seconds), added by the storefront if
 // the agent didn't set one.
 
-// The Security Flow panel: a dark stage-column diagram (Identity ->
+// The Control Room tab's stage graph: a dark stage-column diagram (Identity ->
 // Authenticate -> Approval -> Credential -> Execute), each column holding
 // one or more real actor-cards, with a pulse that travels card-to-card as
 // real events arrive (see playTurnAnimation below). One source of truth
@@ -141,6 +141,10 @@ const PRODUCT_IMAGES = {
   speaker: "speaker.jpg",
   sleeve: "sleeve.jpg",
   hub: "hub.jpg",
+  iphone: "iphone.jpg",
+  macbook: "macbook.jpg",
+  airpods: "airpods.jpg",
+  watch: "applewatch.jpg",
 };
 
 function _imageFor(name) {
@@ -153,7 +157,7 @@ function _imageFor(name) {
 
 async function loadCustomers() {
   const customers = await j("GET", "/api/customers");
-  // Two pickers, same options -- the Security Flow tab's (demo-controls)
+  // Two pickers, same options -- the Control Room tab's (demo-controls)
   // and the one inside the chat widget itself, so a real visitor never
   // has to leave the chat to say who they are.
   for (const sel of [$("customer-picker"), $("chat-customer-picker")]) {
@@ -187,6 +191,28 @@ async function loadProducts() {
         <div class="price">${money(p.price_pence)}</div>
       </div>`;
     grid.appendChild(card);
+  }
+}
+
+// Presenter reference: who ordered what, with the order number -- lives
+// in the Control Room tab only (see index.html's comment), reusing the
+// same /api/orders data the backend already serves. Refreshed on load and
+// after a reset, since a reset reverts any refunds back to their
+// pre-refund status.
+async function loadOrderHistory() {
+  const orders = await j("GET", "/api/orders");
+  const body = $("order-history-body");
+  body.innerHTML = "";
+  for (const o of orders.slice().sort((a, b) => a.order_id - b.order_id)) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>#${o.order_id}</td>
+      <td>${o.customer_name}</td>
+      <td>${o.product_name}</td>
+      <td>${o.quantity}</td>
+      <td>${money(o.total_pence)}</td>
+      <td class="order-status order-status-${o.status}">${o.status}</td>`;
+    body.appendChild(tr);
   }
 }
 
@@ -356,6 +382,7 @@ $("reset-btn").addEventListener("click", async () => {
   $("event-stream").innerHTML = "";
   renderStageGraph();
   renderSuggestions();
+  loadOrderHistory(); // reset reverts refunds -- the status column needs refreshing too
 });
 
 function _setCustomerId(id) {
@@ -369,15 +396,22 @@ $("customer-picker").addEventListener("change", (e) => {
 $("chat-customer-picker").addEventListener("change", (e) => {
   _setCustomerId(parseInt(e.target.value, 10));
 });
-$("agent-picker").addEventListener("change", (e) => {
-  state.agent = e.target.value;
+
+// Two pickers, same options -- the Control Room tab's and the one inside
+// the chat widget, kept in sync the same way the customer pickers are.
+function _setAgent(mode) {
+  state.agent = mode;
+  $("agent-picker").value = mode;
+  $("chat-agent-picker").value = mode;
   resetFlowState();
   renderStageGraph();
   drawConnectors(); // which cards are visible changed (legacy vs. the two real agents)
-});
+}
+$("agent-picker").addEventListener("change", (e) => _setAgent(e.target.value));
+$("chat-agent-picker").addEventListener("change", (e) => _setAgent(e.target.value));
 
 // ---------- tabs ----------
-// "Shop" is the consumer-facing view; "Security Flow" holds the demo-only
+// "Shop" is the consumer-facing view; "Control Room" holds the demo-only
 // controls (customer/agent pickers) plus the flow panel -- a real shopper
 // never sees those, so they don't live in the default view.
 
@@ -391,7 +425,7 @@ function switchTab(name) {
 $("tab-btn-shop").addEventListener("click", () => switchTab("shop"));
 $("tab-btn-flow").addEventListener("click", () => switchTab("flow"));
 
-// ---------- Security Flow panel ----------
+// ---------- Control Room: stage graph + order history ----------
 
 // Shared per-event bookkeeping used by both a live turn (applyEvents) and
 // the one-time backfill from /api/state's log (pollState) -- one place
@@ -434,6 +468,7 @@ function applyEvents(events) {
   if (events.length) state.anyActivity = true;
   renderStageGraph();
   playTurnAnimation(events); // fire-and-forget visual pulse, over already-settled text
+  if (events.some((e) => e.type === "refund_issued")) loadOrderHistory(); // status just changed
 }
 
 // Actor tag for the terminal-style event stream -- derived from the
@@ -931,6 +966,7 @@ setInterval(pollState, 4000);
   renderSuggestions();
   await loadCustomers();
   await loadProducts();
+  await loadOrderHistory();
   await pollState();
   renderStageGraph();
 })();

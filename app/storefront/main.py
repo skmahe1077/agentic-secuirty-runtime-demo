@@ -6,7 +6,7 @@ customer only ever picks "Legacy" vs "Zero-trust" (`insecure` vs `secure`)
 in the UI -- which of the two real zero-trust identities actually handles a
 "secure" request is decided here, automatically, by `_resolve()`. The
 agent's identity/credential telemetry comes back on every chat response and
-the UI renders it in the "Security Flow" panel -- deliberately a plain
+the UI renders it in the "Agentic Workflow" panel -- deliberately a plain
 polled JSON state rather than an SSE stream, so there is nothing to
 silently disconnect on stage.
 """
@@ -150,10 +150,53 @@ def api_chat(req: ChatRequest):
     return payload
 
 
+# ---- human-token cache: real OBO delegation --------------------------
+# scripts/presenter-login.sh declares "a human is present, call them X"
+# once before a demo window -- NOT a real IdP login (see docs/RUNBOOK.md's
+# Phase 0b finding: IBM Verify's documented token-exchange grant never
+# mentions RAR at all, so this repo signs the delegated token itself; see
+# app/agent/src/agent/obo.py). `sub` is fixed to "human-approver" because
+# that's the literal external_id terraform/obo.tf's entity-alias is bound
+# to -- the display name is cosmetic, the sub is what Vault actually
+# resolves to an entity and its policy.
+_HUMAN_TOKEN_TTL_SECONDS = 1800  # 30 minutes -- long enough for a rehearsal, short enough to force a fresh presenter-login before the real talk
+_human_token: dict | None = None  # {display_name, sub, cached_at}
+
+
+def _valid_human_token() -> dict | None:
+    if _human_token is None:
+        return None
+    if time.time() - _human_token["cached_at"] > _HUMAN_TOKEN_TTL_SECONDS:
+        return None
+    return _human_token
+
+
+class HumanTokenRequest(BaseModel):
+    display_name: str
+
+
+@app.post("/api/admin/human-token")
+def api_set_human_token(req: HumanTokenRequest):
+    global _human_token
+    _human_token = {"display_name": req.display_name, "sub": "human-approver", "cached_at": time.time()}
+    return {"ok": True}
+
+
+@app.get("/api/admin/human-token")
+def api_get_human_token():
+    """Status only -- never the token itself. Polled by the Agentic
+    Workflow's approval card to render the identity chip / disabled state."""
+    token = _valid_human_token()
+    if token is None:
+        return {"present": False}
+    remaining = _HUMAN_TOKEN_TTL_SECONDS - (time.time() - token["cached_at"])
+    return {"present": True, "display_name": token["display_name"], "expires_in": int(remaining)}
+
+
 class ResumeRequest(BaseModel):
     agent: str
     thread_id: str = "demo"
-    approved_by: str
+    approved_by: str | None = None  # insecure-mode fallback only; secure mode derives it from the cached human token
 
 
 @app.post("/api/support/resume")
@@ -163,12 +206,19 @@ def api_resume(req: ResumeRequest):
     # No message to classify on resume -- reuses whichever backend this
     # thread already routed to in api_chat.
     backend = _resolve(req.agent, req.thread_id)
+
+    body = {"thread_id": req.thread_id}
+    if req.agent == "secure":
+        token = _valid_human_token()
+        if token is None:
+            raise HTTPException(409, "no human credential cached -- run scripts/presenter-login.sh")
+        body["approved_by"] = token["display_name"]
+        body["subject_token"] = token["sub"]
+    else:
+        body["approved_by"] = req.approved_by or "anonymous"
+
     try:
-        r = httpx.post(
-            f"{AGENT_URLS[backend]}/resume",
-            json={"thread_id": req.thread_id, "approved_by": req.approved_by},
-            timeout=30.0,
-        )
+        r = httpx.post(f"{AGENT_URLS[backend]}/resume", json=body, timeout=30.0)
         r.raise_for_status()
     except httpx.HTTPError as exc:
         raise HTTPException(502, f"agent '{backend}' unreachable: {exc}") from exc
@@ -195,6 +245,43 @@ def api_revoke(req: RevokeRequest):
     payload = r.json()
     _record(payload.get("events", []))
     return payload
+
+
+# order-agent's plausible mistake is more MONEY privilege (there's no DB
+# role above refund-writer to test refund-agent against); refund-agent's
+# is PII exposure (terraform/vault-config.tf's customer-pii-reader role,
+# never in its real policy outside the deliberate widen window). One
+# escalation target per agent, not user-choosable -- picking an arbitrary
+# role here would be testing nothing real.
+_CEILING_TARGET_ROLE = {"order": "refund-writer", "refund": "customer-pii-reader"}
+
+
+class CeilingTestRequest(BaseModel):
+    agent: str = "order"
+
+
+@app.post("/api/admin/ceiling-test")
+def api_ceiling_test(req: CeilingTestRequest):
+    """Makes scripts/04-verify-agentic-iam.sh's ceiling-misconfiguration
+    probe clickable on stage: asks the named agent's own real Vault token
+    to attempt its escalation-target role. Adds no new grant anywhere --
+    just asks the agent to try with what it already has. Denied normally;
+    only succeeds during a deliberate live policy-widen in the presenter's
+    terminal, and self-revokes immediately if it does."""
+    backend = req.agent if req.agent in _CEILING_TARGET_ROLE else "order"
+    target_role = _CEILING_TARGET_ROLE[backend]
+    try:
+        r = httpx.post(
+            f"{AGENT_URLS[backend]}/debug/ceiling-probe",
+            json={"target_role": target_role},
+            timeout=10.0,
+        )
+        r.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"agent '{backend}' unreachable: {exc}") from exc
+    event = r.json()
+    _record([event])
+    return {"events": [event]}
 
 
 @app.post("/api/admin/forget")

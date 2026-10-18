@@ -17,7 +17,7 @@ not just a slide claim:
 | **A practical architecture for registering agents** | SPIRE's `ClusterSPIFFEID`s (`k8s_manifests/spire/values.yaml`) assign a SPIFFE identity to each agent pod by namespace + service account -- the identity exists before the agent ever calls Vault, not minted on the fly. Beat 4 adds Vault's own literal **Agent Registry**: `vault read agent-registry/registration/display-name/order-agent` and `.../refund-agent` show two first-class, inventoried identities, each with its own ceiling policy -- not just tokens, and not just one agent. |
 | **Enforcing policy at every tool or API call** | Beat 2's scope tile: `orders:SELECT`, `refunds:INSERT` allowed, `customers` denied -- enforced by PostgreSQL grants on a Vault-issued role, re-checked on every query, not cached as a one-time login decision. |
 | **Connecting human intent to agent action** | Beat 3: the refund tool call interrupts for approval; the resulting Vault child token carries the approver's name as token metadata, so the *action* and the *approval* are the same auditable event, not two separate logs to correlate by hand. |
-| **Building audit-ready controls across Kubernetes, cloud-native, and hybrid environments** | Kubernetes = EKS running SPIRE, both agents, **and Vault itself** (Raft + KMS auto-unseal); cloud-native = Vault's dynamic credentials and AWS KMS; hybrid = the storefront's RDS connection crossing both. The **Control Room panel's Approval stage** is the "audit-ready" proof point: after an approved refund its detail drawer shows the approver's name, the workload's SPIFFE ID, and the Vault lease id **together** -- and it stays complete after the Credential stage is revoked, because the credential is ephemeral and the record of who authorized it is not. Vault's own audit log carries the identical three fields on the same request and is verified by `scripts/03-verify.sh`; it is deliberately **not** shown on stage. |
+| **Building audit-ready controls across Kubernetes, cloud-native, and hybrid environments** | Kubernetes = EKS running SPIRE, both agents, **and Vault itself** (Raft + KMS auto-unseal); cloud-native = Vault's dynamic credentials and AWS KMS; hybrid = the storefront's RDS connection crossing both. The **Agentic Workflow panel's Approval stage** is the "audit-ready" proof point: after an approved refund its detail drawer shows the approver's name, the workload's SPIFFE ID, and the Vault lease id **together** -- and it stays complete after the Credential stage is revoked, because the credential is ephemeral and the record of who authorized it is not. Vault's own audit log carries the identical three fields on the same request and is verified by `scripts/03-verify.sh`; it is deliberately **not** shown on stage. |
 
 Keep this table in view when cutting slides -- each promise should land on-screen as something
 that actually happened in the browser a moment earlier, not as a bullet point asserted on its
@@ -48,7 +48,7 @@ Switch the widget to `agent-secure`.
    nothing. No standing credential exists to find. (Presenter terminal -- "there is no secret
    in this pod" cannot be shown by a UI that only renders what the agent reports.)
 2. *(Optional -- consider cutting.)* `cat /svids/jwt_svid.token`, decode the payload: `sub` is
-   the full SPIFFE ID, `aud: vault`, `exp` five minutes out. The Control Room panel's
+   the full SPIFFE ID, `aud: vault`, `exp` five minutes out. The Agentic Workflow panel's
    **Identity** stage, clicked open, already shows `spiffe_id` plus a live SVID expiry
    countdown, which is most of what the decoded payload shows, in the medium the audience is
    already watching -- cutting this step saves a window switch at the exact moment the panel
@@ -60,7 +60,7 @@ Switch the widget to `agent-secure`.
 4. Ask for a different order's customer, or for another customer's PII directly -- denied,
    and say why: *this isn't an if-statement, PostgreSQL itself has no grant for this role on
    `customers`.*
-5. **The money shot**: click the **Credential** stage in the Control Room panel, then
+5. **The money shot**: click the **Credential** stage in the Agentic Workflow panel, then
    **Revoke now** in its detail drawer. Say *"this happens automatically in three minutes --
    forcing it now so the point lands before we move on."* Same query, now fails. `pg_roles`
    has zero `v-%` rows, and the Credential stage's live countdown flips to "revoked."
@@ -74,18 +74,38 @@ you don't.
 
 ## Beat 3 -- human intent -> agent action -> audit correlation (~4 min)
 
-1. Ask for a refund that's clearly too large (#1044, £450) -- the graph interrupts; the panel
-   shows "awaiting approval."
-2. Approve it, by name, in the approval card.
-3. The agent proceeds under a **child Vault token** carrying the approval as token metadata.
-4. Click the **Approval** stage in the Control Room panel: its detail drawer now shows the
-   approver, SPIFFE ID, and lease id together. Say the line: *"the credential is gone in three
-   minutes -- this record is not."* (Vault's own audit log carries the identical three fields
-   on this request -- presenter-only verification via `scripts/03-verify.sh`, not shown on
-   stage.)
+**Setup, before you walk on stage**: `bash scripts/presenter-login.sh "<your name>"`. This
+caches your name as the approver for the next 30 minutes -- it is NOT a real IdP login (see
+below for why). If you skip this, the Approve button is disabled with an explicit reason, not
+a silent failure.
 
-Run with `scripts/demo-beat3.sh "<your name>"` as a rehearsal harness; on stage, perform this
-by clicking in the browser.
+1. Ask for a refund that's clearly too large (#1044, £450) -- the graph interrupts; the panel
+   shows "awaiting approval," and the approval card shows an identity chip ("Approve as
+   **you** -- expires in Nm") instead of a text box to type into.
+2. Click **Approve**. This is **real Vault OBO (on-behalf-of) delegation, not metadata on a
+   child token**: the agent exchanges your cached identity for a fresh, RAR-scoped Bearer
+   token -- `authorization_details` naming exactly `read` on this one role -- and Vault checks
+   it against the intersection of the agent's ceiling policy, your policy, and that claim. Two
+   new events land in the stream as this happens: `delegation_requested` (the RAR claim going
+   out), `delegation_granted` (Vault's `sub`/`act.sub` on the way back).
+3. Click the **Approval** stage in the Agentic Workflow panel: its detail drawer now shows the
+   approver and lease id together, same as before -- the correlation story didn't change, only
+   what's backing it did. Say the line: *"the credential is gone in a minute -- this record is
+   not."* (Vault's own audit log carries the identical fields on this request -- presenter-only
+   verification via `scripts/03-verify.sh`, not shown on stage.)
+
+**One sentence on what's not real here, if asked**: there's no actual IdP in this loop. IBM
+Verify was checked -- its documented token-exchange grant (`docs.verify.ibm.com`) never
+mentions RFC 9396 `authorization_details` at all, not "untested," genuinely absent from the
+vendor's own docs -- so this demo signs the delegated token itself
+(`app/agent/src/agent/obo.py`), with the same throwaway key Vault's resource-server profile was
+given. What Vault enforces on receipt is identical either way; only the signer changes. Say so
+plainly -- it's a defensible shortcut, not a thing to hide.
+
+Run with `scripts/demo-beat3.sh "<your name>"` as a rehearsal harness for the chat/approval
+flow itself; on stage, perform this by clicking in the browser. See
+`docs/RUNBOOK.md`'s "OBO -- what was actually tested" for the full empirical record
+(`scripts/05-verify-obo.sh`'s T1-T5 matrix, including the live `CEILING_POLICY_DENIED` result).
 
 ## Beat 4 -- two agents, one registry, real restriction (~3 min)
 
@@ -95,7 +115,7 @@ Community/HCP-flexible build, and worth saying so if asked. This beat shows the 
 product this repo is named after, and it's the one beat where the audience hasn't seen the
 mechanism yet: **there are two agents behind "Zero-trust," not one.**
 
-1. Open the Control Room tab -- the Identity column already shows **both** agents, live,
+1. Open the Agentic Workflow tab -- the Identity column already shows **both** agents, live,
    before a single message is sent: `order-agent` and `refund-agent`, each with its own real
    ceiling-policy tag (`order-agent-ceiling` / `agent-ceiling`) read straight off Vault's Agent
    Registry. Say the line: *"these are two first-class, inventoried identities in Vault, each
@@ -115,21 +135,47 @@ mechanism yet: **there are two agents behind "Zero-trust," not one.**
    the security boundary -- even when it guesses wrong, PostgreSQL still won't let the
    read-only agent write a refund."* Run with `scripts/demo-beat4-agentic-iam.sh` as a
    rehearsal harness for all of the above.
-5. One sentence on what's confirmed and what isn't (presenter-only detail, not worth a live
+5. One sentence on the bare-Bearer-JWT RAR experiment (presenter-only detail, not worth a live
    click -- **do not claim this live**): a bare Bearer JWT carrying `authorization_details`,
    presented directly outside a real OAuth/OBO exchange, was tested on this real cluster and
    refused identically (HTTP 403) whether its path/capability claim was right or wrong -- RAR
-   enforcement on this path isn't real without an actual OBO flow. Separately, the Agent
-   Registry's ceiling policy did NOT block a normal `auth/spiffe` token after its real policy
-   was deliberately widened -- the ceiling constrains an OBO/RAR-delegated request, not an
-   agent's own ordinary token. (See `docs/RUNBOOK.md`'s recorded 4a/4b/4c HTTP codes and the
-   misconfiguration-test result.) What IS real and demo-able: the Agent Registry itself (two
-   first-class registrations, two genuinely different ceiling policies), and the PostgreSQL-
-   level denial in point 4 above.
-6. One sentence on what's deliberately NOT shown: real on-behalf-of human delegation needs an
-   enterprise IdP doing RFC 8693 token exchange -- *"the ceiling policy and RAR constraint you
-   just saw are the mechanics; OBO is the next piece, and it needs an IdP most of you don't
-   have yet."*
+   enforcement on this path isn't real without an actual OBO flow. (See `docs/RUNBOOK.md`'s
+   recorded 4a/4b/4c HTTP codes.)
+6. **Now live-clickable, for BOTH agents**: the Agentic Workflow has a select ("order-agent ->
+   refund-writer" / "refund-agent -> customer-pii-reader") and a "⛰ Probe this agent's ceiling"
+   button. Each asks the picked agent's own real Vault token to attempt its one escalation-
+   target role -- the same test `scripts/04-verify-agentic-iam.sh` runs for order-agent, now on
+   stage instead of only in a presenter terminal, plus a second, new test for refund-agent.
+   Why two different targets: order-agent's plausible mistake is more MONEY privilege
+   (`refund-writer`); refund-agent already legitimately holds that, so there's no role above it
+   to test -- its plausible mistake is PII exposure instead (`customer-pii-reader`, a brand-new
+   Vault database role added for this test, scoped to `SELECT` on `customers` only).
+   Click either cold: **denied** (green line, "no grant on database/creds/\<role\> -- refused,
+   as expected"). Then, in the presenter terminal:
+   `bash scripts/demo-beat4-ceiling.sh widen order` (or `widen refund`) -- widens that agent's
+   real policy to also grant its escalation-target role -- and click the button again:
+   **succeeds live** (red line -- "a real policy mistake, and the Agent Registry ceiling did
+   NOT catch it"), and self-revokes the credential it just proved it could mint. No re-login, no
+   redeploy -- Vault re-evaluates a named policy's content on every request against tokens that
+   already carry that name, so widening it live immediately changes what an already-issued
+   token can do. Say the line: *"the Agent Registry's ceiling policy did not stop this -- it
+   only constrains an OBO/RAR-delegated request, not an agent's own ordinary token; this button
+   proves that live, not just in my terminal -- and it's true whichever agent you pick."* Run
+   `bash scripts/demo-beat4-ceiling.sh revert order` (or `revert refund`) before moving on, and
+   click the button once more to confirm it's denied again. This button only demonstrates the
+   misconfiguration being *invisible* to the ceiling on an agent's own ordinary token -- it
+   doesn't exercise the ceiling blocking anything, because that only happens inside a real
+   OBO/RAR exchange.
+7. **Callback to beat 3**: that OBO/RAR exchange isn't hypothetical any more -- it's the
+   mechanism beat 3 just used. Say the line: *"the ceiling policy you just watched NOT catch a
+   mistake, on this agent's own token -- it's the SAME ceiling policy that just gated the real
+   delegated refund in beat 3. One policy, two request shapes, two different outcomes -- that
+   contrast is the whole lesson."* `scripts/05-verify-obo.sh`'s T2 result is the empirical
+   proof: the human's own policy allows `customer-pii-reader`, refund-agent's ceiling doesn't,
+   and Vault's actual error back is `CEILING_POLICY_DENIED` -- a real error code, not a
+   hypothetical. The one thing still not real: a production IdP signing that delegated token
+   instead of this repo's own throwaway key (see beat 3's "what's not real here" line) -- the
+   Vault-side enforcement is identical regardless of who signs it.
 
 Run with `scripts/04-verify-agentic-iam.sh` to confirm this beat is live before promising it.
 

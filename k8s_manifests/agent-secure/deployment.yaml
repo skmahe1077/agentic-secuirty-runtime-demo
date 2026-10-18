@@ -48,6 +48,22 @@ spec:
               value: refund-writer
             - name: SVID_PATH
               value: /svids/jwt_svid.token
+            # Real OBO delegation (app/agent/src/agent/obo.py) -- see
+            # k8s_manifests/agent-secure/secret-obo.yaml and
+            # docs/RUNBOOK.md's "OBO -- what was actually tested".
+            # OBO_HUMAN_SUB/OBO_AGENT_SUB must match terraform/obo.tf's
+            # entity-alias external_id values exactly, or Vault can't
+            # resolve either half of the ceiling ∧ human-policy check.
+            - name: OBO_PRIVATE_KEY_PATH
+              value: /obo-keys/private_key.pem
+            - name: OBO_ISSUER
+              value: "spiffe://nimbus.demo/obo-probe"
+            - name: OBO_KID
+              value: "obo-probe-key-0"
+            - name: OBO_HUMAN_SUB
+              value: "human-approver"
+            - name: OBO_AGENT_SUB
+              value: "agent-secure"
             - name: AGENT_ENGINE
               value: "${AGENT_ENGINE:-deterministic}"
             - name: ANTHROPIC_API_KEY
@@ -56,6 +72,9 @@ spec:
           volumeMounts:
             - name: svids
               mountPath: /svids
+              readOnly: true
+            - name: obo-signing-key
+              mountPath: /obo-keys
               readOnly: true
           readinessProbe:
             httpGet: { path: /healthz, port: 8000 }
@@ -99,6 +118,9 @@ spec:
         - name: helper-config
           configMap:
             name: spiffe-helper-config
+        - name: obo-signing-key
+          secret:
+            secretName: obo-signing-key
 ---
 apiVersion: v1
 kind: Service

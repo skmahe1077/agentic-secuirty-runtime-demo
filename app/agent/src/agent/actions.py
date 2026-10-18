@@ -14,6 +14,7 @@ import psycopg2
 import psycopg2.errors
 import psycopg2.extras
 
+import obo
 from approval import approval_token_metadata
 
 
@@ -108,16 +109,52 @@ def issue_refund(
     approved_by: str | None = None,
     correlation_id: str | None = None,
     approval_metadata: dict | None = None,
+    subject_token: str | None = None,
 ) -> tuple[str, list[dict]]:
     events = _credential_events(session, "issue_refund")
     approval_metadata = approval_metadata or (
         approval_token_metadata(correlation_id, approved_by) if approved_by and correlation_id else None
     )
+
+    # Real OBO delegation, when a human credential was cached (see
+    # app/storefront/main.py's /api/admin/human-token). `subject_token`
+    # isn't a bearer credential to verify here -- there's no real IdP to
+    # check it against in this fallback (see docs/RUNBOOK.md's Phase 0b
+    # finding) -- it's just the signal that a human asserted approval
+    # through scripts/presenter-login.sh. Falls through to the old
+    # free-text `approval_metadata` path if this agent has no OBO signing
+    # key configured (order-agent, or if presenter-login was never run).
+    obo_token = None
+    if subject_token:
+        s = session.settings
+        try:
+            obo_token = obo.exchange(s, f"{s.vault_db_mount}/creds/{s.vault_db_role}", ["read"])
+            events.append({
+                "type": "delegation_requested",
+                "human_sub": obo_token.human_sub,
+                "rar": obo_token.authorization_details,
+                "message": (
+                    f"requesting delegated access on behalf of {approved_by}: "
+                    f"{obo_token.authorization_details[0]['capabilities']} on "
+                    f"{obo_token.authorization_details[0]['path']}"
+                ),
+            })
+        except obo.OboUnavailable:
+            obo_token = None
+
     try:
-        creds = session.get_db_credentials(approval_metadata=approval_metadata)
+        creds = session.get_db_credentials(approval_metadata=approval_metadata, obo_token=obo_token)
     except Exception as exc:  # noqa: BLE001
         events.append({"type": "error", "message": f"could not obtain a database credential: {exc}"})
         return "I couldn't reach the order database right now.", events
+
+    if obo_token is not None:
+        events.append({
+            "type": "delegation_granted",
+            "human_sub": obo_token.human_sub,
+            "agent_sub": obo_token.agent_sub,
+            "message": f"Vault honored the delegated request -- sub={obo_token.human_sub}, act.sub={obo_token.agent_sub}",
+        })
 
     auth = session.auth_event()
     if auth:
@@ -132,7 +169,11 @@ def issue_refund(
         "approval": creds.get("approval"),
         "message": (
             f"issued credential {creds['lease_role']} (lease {creds['lease_id']})"
-            + (f", child token carries approval {correlation_id}" if approval_metadata else "")
+            + (
+                f", delegated via OBO on behalf of {obo_token.human_sub}" if obo_token is not None
+                else f", child token carries approval {correlation_id}" if approval_metadata
+                else ""
+            )
         ),
     })
 

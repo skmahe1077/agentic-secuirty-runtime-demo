@@ -12,7 +12,7 @@
     <div class="topbar-controls">
       <div class="tab-switcher">
         <button id="tab-btn-shop" class="tab-btn active" data-tab="shop" type="button">Shop</button>
-        <button id="tab-btn-flow" class="tab-btn" data-tab="flow" type="button">Control Room</button>
+        <button id="tab-btn-flow" class="tab-btn" data-tab="flow" type="button">Agentic Workflow</button>
       </div>
       <button id="reset-btn" class="btn-ghost" title="Reset demo state">↺ Reset</button>
     </div>
@@ -27,7 +27,7 @@
     <aside id="tab-flow" class="tab-panel panel hidden">
       <div class="flow-dark">
         <div class="flow-dark-header">
-          <span class="flow-dark-title">Control Room <span class="flow-live-dot"></span> Live</span>
+          <span class="flow-dark-title">Agentic Workflow <span class="flow-live-dot"></span> Live</span>
         </div>
 
         <!-- Demo-only controls: which customer is chatting, and which
@@ -46,6 +46,28 @@
               <option value="secure" selected>Zero-trust (SPIFFE + Vault JIT)</option>
             </select>
           </label>
+        </div>
+
+        <!-- Ceiling-misconfiguration probe, live: asks the chosen agent's
+             own real Vault token to attempt its one escalation-target role
+             (order-agent -> refund-writer, more money privilege;
+             refund-agent -> customer-pii-reader, PII exposure -- there's no
+             role above refund-writer to test it against, see
+             app/storefront/main.py's _CEILING_TARGET_ROLE). No new grant is
+             added by this button -- it just asks with what the agent
+             already has. Denied unless the presenter has deliberately
+             widened that agent's real policy in the terminal
+             (scripts/demo-beat4-ceiling.sh widen order|refund), in which
+             case it succeeds live and self-revokes. -->
+        <div class="ceiling-probe-row">
+          <select id="ceiling-probe-agent">
+            <option value="order" selected>order-agent -&gt; refund-writer</option>
+            <option value="refund">refund-agent -&gt; customer-pii-reader</option>
+          </select>
+          <button id="ceiling-probe-btn" class="btn-ghost" type="button">
+            ⛰ Probe this agent's ceiling
+          </button>
+          <span id="ceiling-probe-result" class="ceiling-probe-result"></span>
         </div>
 
         <!-- Order history: who ordered what, with the order number -- a
@@ -144,11 +166,17 @@
       <div id="chat-log" class="chat-log"></div>
       <div id="chat-suggestions" class="chat-suggestions"></div>
 
+      <!-- Real OBO delegation, not a free-text name box: the identity
+           chip here is populated from the storefront's cached human
+           token (set once by scripts/presenter-login.sh, see
+           docs/RUNBOOK.md's "OBO -- what was actually tested"). If no
+           credential is cached, Approve is disabled outright -- the
+           agent cannot self-approve. See app.js's refreshHumanToken(). -->
       <div id="approval-card" class="approval-card hidden">
         <div class="approval-text"></div>
+        <div class="approval-identity" id="approval-identity"></div>
         <div class="approval-row">
-          <input id="approver-name" type="text" placeholder="Your name" />
-          <button id="approve-btn">Approve</button>
+          <button id="approve-btn" disabled>Approve</button>
         </div>
       </div>
 

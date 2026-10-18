@@ -95,7 +95,13 @@ class LangChainEngine:
         reply = result["messages"][-1].content
         return AgentTurnResult(reply=reply, events=list(ctx.events))
 
-    def handle_resume(self, thread_id: str, approved_by: str) -> AgentTurnResult:
+    def handle_resume(self, thread_id: str, approved_by: str, subject_token: str | None = None) -> AgentTurnResult:
+        # subject_token (real OBO delegation, see deterministic_engine.py's
+        # handle_resume and docs/RUNBOOK.md) is NOT wired into this engine
+        # yet -- accepted for interface parity with server.py's call, but
+        # ignored; LangChain's interrupt()-based resume already carries its
+        # own "NEEDS LIVE VALIDATION" caveat above, and layering OBO on top
+        # of an unvalidated mechanism isn't worth the risk before the talk.
         self.session.begin_turn()
         ctx = self._contexts.get(thread_id)
         if ctx is None:

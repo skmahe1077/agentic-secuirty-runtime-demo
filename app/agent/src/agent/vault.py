@@ -26,8 +26,10 @@ import json
 import time
 
 import hvac
+import requests
 
 from config import Settings
+from obo import DelegatedToken
 
 
 def _decode_jwt_payload(token: str) -> dict:
@@ -69,14 +71,15 @@ class StaticCredentialSession:
 
     def auth_event(self) -> dict | None:
         # No auth/spiffe login happens for this anti-pattern -- the "Auth"
-        # stage in the storefront's Security Flow panel has nothing to
+        # stage in the storefront's Agentic Workflow panel has nothing to
         # report, which is itself the point.
         return None
 
-    def get_db_credentials(self, approval_metadata: dict | None = None) -> dict:
+    def get_db_credentials(self, approval_metadata: dict | None = None, obo_token: DelegatedToken | None = None) -> dict:
         # The anti-pattern this class models has no concept of per-request
-        # scoping, so an approval has nowhere to attach -- it is silently
-        # dropped, which is itself part of the point.
+        # scoping, so an approval -- real OBO or the old free-text kind --
+        # has nowhere to attach; both are silently dropped, which is
+        # itself part of the point.
         s = self.settings
         return {
             "username": s.static_db_user,
@@ -110,6 +113,14 @@ class StaticCredentialSession:
 
     def forget(self) -> None:
         pass  # nothing cached -- this credential never changes, which is the point
+
+    def probe_ceiling(self, target_role: str = "refund-writer") -> dict:
+        return {
+            "type": "ceiling_probe",
+            "target_role": target_role,
+            "allowed": None,
+            "message": "not applicable -- this agent never touches Vault at all",
+        }
 
 
 class VaultSession:
@@ -208,19 +219,83 @@ class VaultSession:
             "message": f"authenticated via auth/{self.settings.vault_auth_mount}",
         }
 
-    def get_db_credentials(self, approval_metadata: dict | None = None) -> dict:
+    def probe_ceiling(self, target_role: str = "refund-writer") -> dict:
+        """Attempts database/creds/{target_role} using THIS agent's own,
+        already-authenticated client -- no new Vault grant is added for
+        this call. If an operator has (mistakenly, or as a deliberate
+        demo) widened this agent's real ACL policy to also grant that
+        role, Vault re-evaluates policy content by name on every request,
+        so an already-issued token gains the new capability immediately,
+        no re-login needed. Exists to make
+        scripts/04-verify-agentic-iam.sh's ceiling-misconfiguration test
+        visible live in the Agentic Workflow UI instead of only a presenter-
+        terminal `vault read`. Self-cleaning: a credential this agent was
+        never meant to hold is revoked immediately, not left alive."""
+        client = self._client_logged_in()
+        s = self.settings
+        try:
+            creds = client.secrets.database.generate_credentials(
+                name=target_role, mount_point=s.vault_db_mount
+            )
+        except hvac.exceptions.Forbidden:
+            return {
+                "type": "ceiling_probe",
+                "target_role": target_role,
+                "allowed": False,
+                "message": f"{s.agent_name}'s own real policy has no grant on database/creds/{target_role} -- refused, as expected",
+            }
+        client.sys.revoke_lease(creds["lease_id"])
+        return {
+            "type": "ceiling_probe",
+            "target_role": target_role,
+            "allowed": True,
+            "message": (
+                f"{s.agent_name}'s own token WAS allowed database/creds/{target_role} "
+                "(now revoked) -- a real policy mistake, and the Agent Registry ceiling did NOT catch it"
+            ),
+        }
+
+    def get_db_credentials(self, approval_metadata: dict | None = None, obo_token: DelegatedToken | None = None) -> dict:
         now = time.time()
-        if approval_metadata is None and self._cached and self._cached.get("expires_at", 0) > now + 5:
+        if approval_metadata is None and obo_token is None and self._cached and self._cached.get("expires_at", 0) > now + 5:
             return self._cached
 
         s = self.settings
         approval_record = None
-        if approval_metadata:
-            # Human-approved actions get their own freshly-minted child
-            # token carrying the approval as token metadata, so Vault's own
-            # audit log -- not just this app's `refunds` table -- ties the
-            # credential request to who signed off on it. See approval.py
-            # and docs/RUNBOOK.md's audit-correlation notes.
+        if obo_token is not None:
+            # Real OBO: Vault's resource-server mode validates the Bearer
+            # JWT itself and computes ceiling ∧ human-policy ∧ RAR -- see
+            # docs/RUNBOOK.md's "OBO -- what was actually tested". This
+            # bypasses hvac entirely: hvac always sends `X-Vault-Token`,
+            # but resource-server mode needs the JWT as `Authorization:
+            # Bearer`, a different auth path than every other call in
+            # this class. The raw response has the identical shape hvac's
+            # generate_credentials() returns (lease_id/lease_duration/
+            # data.username/data.password) -- confirmed against a live
+            # curl during Phase 0a -- so nothing below needs to change.
+            resp = requests.get(
+                f"{s.vault_addr}/v1/{s.vault_db_mount}/creds/{s.vault_db_role}",
+                headers={"Authorization": f"Bearer {obo_token.token}"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            creds = resp.json()
+            approval_record = {
+                **(approval_metadata or {}),
+                "human_sub": obo_token.human_sub,
+                "agent_sub": obo_token.agent_sub,
+                "rar": obo_token.authorization_details,
+            }
+        elif approval_metadata:
+            # Fallback path (no OBO token supplied) -- the old free-text
+            # approval, kept for the insecure-agent-equivalent story and
+            # as a degrade-safe path if obo.exchange() ever raises
+            # OboUnavailable. Human-approved actions get their own
+            # freshly-minted child token carrying the approval as token
+            # metadata, so Vault's own audit log -- not just this app's
+            # `refunds` table -- ties the credential request to who
+            # signed off on it. See approval.py and docs/RUNBOOK.md's
+            # audit-correlation notes.
             parent = self._client_logged_in()
             # Merge in the workload's own SPIFFE id (not just the approval
             # fields) and carry the identity into the child token's
@@ -240,12 +315,14 @@ class VaultSession:
             )
             client = hvac.Client(url=s.vault_addr)
             client.token = token_resp["auth"]["client_token"]
+            creds = client.secrets.database.generate_credentials(
+                name=s.vault_db_role, mount_point=s.vault_db_mount
+            )
         else:
             client = self._client_logged_in()
-
-        creds = client.secrets.database.generate_credentials(
-            name=s.vault_db_role, mount_point=s.vault_db_mount
-        )
+            creds = client.secrets.database.generate_credentials(
+                name=s.vault_db_role, mount_point=s.vault_db_mount
+            )
         ttl = creds["lease_duration"]
         self._cached = {
             "username": creds["data"]["username"],

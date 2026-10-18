@@ -80,6 +80,14 @@ export IMAGE_REGISTRY IMAGE_TAG NAME ALB_INBOUND_CIDRS LEGACY_DB_PASSWORD STOREF
 export RDS_ENDPOINT="$(tf_output rds_endpoint)"
 export DB_NAME="nimbus"
 export VAULT_ADDR="$(tf_output vault_internal_addr)"
+# k8s_manifests/agent-secure/secret-obo.yaml's signing key -- same
+# throwaway key terraform/obo.tf registered on the "obo-probe" OAuth
+# resource-server profile. Generate it first if this is a from-scratch
+# provision: `python3 scripts/mint_rar_jwt.py --keys-dir
+# terraform/obo-probe-keys --sub human-approver --actor-sub agent-secure
+# --out /tmp/obo_setup.jwt` (scripts/05-verify-obo.sh's own setup step
+# does this too, idempotently).
+export OBO_PRIVATE_KEY_PEM_B64="$(base64 < "$REPO_ROOT/terraform/obo-probe-keys/rar_probe_key.pem" | tr -d '\n')"
 
 kubectl apply -f "$REPO_ROOT/k8s_manifests/00-namespaces.yaml"
 for f in "$REPO_ROOT"/k8s_manifests/agent-insecure/*.yaml \

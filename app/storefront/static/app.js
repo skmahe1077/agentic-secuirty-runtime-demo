@@ -19,7 +19,7 @@
 // Every event also carries `ts` (epoch seconds), added by the storefront if
 // the agent didn't set one.
 
-// The Control Room tab's stage graph: a dark stage-column diagram (Identity ->
+// The Agentic Workflow tab's stage graph: a dark stage-column diagram (Identity ->
 // Authenticate -> Approval -> Credential -> Execute), each column holding
 // one or more real actor-cards, with a pulse that travels card-to-card as
 // real events arrive (see playTurnAnimation below). One source of truth
@@ -49,11 +49,12 @@ const STAGES = [
     cards: [{ id: "vault-auth", label: "Vault", icon: "🔒", sub: "auth/spiffe" }],
   },
   {
-    id: "approval", num: 3, label: "Approval", icon: "🧑‍⚖️", eventTypes: ["approval_requested", "approval_granted"],
-    what: "Refunds over £100 pause here for a named human to approve before any credential is minted; the approval becomes metadata on a freshly-minted Vault child token. Under the threshold, this stage is bypassed entirely -- shown as a bypass arc, not skipped silently.",
-    why: "Human intent and agent action are tied to the same auditable event -- not two logs to stitch together by hand.",
-    tags: ["human-in-the-loop", "Vault child token"],
-    cards: [{ id: "vault-approval", label: "Vault", icon: "🔒", sub: "human sign-off" }],
+    id: "approval", num: 3, label: "Approval", icon: "🧑‍⚖️",
+    eventTypes: ["approval_requested", "approval_granted", "delegation_requested", "delegation_granted"],
+    what: "Refunds over £100 pause here for a human to approve. That approval is REAL Vault OBO (on-behalf-of) delegation, not metadata on a child token: the agent exchanges the human's cached identity for a fresh, RAR-scoped Bearer token (`authorization_details` naming exactly which role/capability this one request needs), and Vault checks it against the intersection of the agent's ceiling policy, the human's own policy, and that RAR claim -- see the ceiling-probe button above for what happens when that check fails on a DIFFERENT kind of request. Under the threshold, this stage is bypassed entirely -- shown as a bypass arc, not skipped silently.",
+    why: "The ceiling policy you can probe in the Credential stage actually binds THIS request -- a normal agent token skips it, a delegated one doesn't. That contrast is the whole point of this stage.",
+    tags: ["human-in-the-loop", "RFC 8693 OBO", "RFC 9396 RAR"],
+    cards: [{ id: "vault-approval", label: "Vault", icon: "🔒", sub: "OBO + RAR" }],
   },
   {
     id: "credential", num: 4, label: "Credential", icon: "🔐", eventTypes: ["credential_issued", "credential_revoked"],
@@ -157,7 +158,7 @@ function _imageFor(name) {
 
 async function loadCustomers() {
   const customers = await j("GET", "/api/customers");
-  // Two pickers, same options -- the Control Room tab's (demo-controls)
+  // Two pickers, same options -- the Agentic Workflow tab's (demo-controls)
   // and the one inside the chat widget itself, so a real visitor never
   // has to leave the chat to say who they are.
   for (const sel of [$("customer-picker"), $("chat-customer-picker")]) {
@@ -195,7 +196,7 @@ async function loadProducts() {
 }
 
 // Presenter reference: who ordered what, with the order number -- lives
-// in the Control Room tab only (see index.html's comment), reusing the
+// in the Agentic Workflow tab only (see index.html's comment), reusing the
 // same /api/orders data the backend already serves. Refreshed on load and
 // after a reset, since a reset reverts any refunds back to their
 // pre-refund status.
@@ -329,23 +330,60 @@ function handleAgentResponse(resp) {
   }
 }
 
+// Real OBO delegation (app/agent/src/agent/obo.py): the storefront caches
+// a human identity once (scripts/presenter-login.sh -> POST
+// /api/admin/human-token), and this card just reflects that cache's
+// status -- it never collects or sends a name itself any more. Polled on
+// an interval while the card is visible so "expires in" counts down and
+// the Approve button disables itself the moment the cache goes stale,
+// instead of only discovering that on click.
+let _humanTokenInterval = null;
+
+async function refreshHumanToken() {
+  const identityEl = $("approval-identity");
+  const btn = $("approve-btn");
+  try {
+    const status = await j("GET", "/api/admin/human-token");
+    if (status.present) {
+      const mins = Math.floor(status.expires_in / 60);
+      const secs = status.expires_in % 60;
+      identityEl.textContent = `Approve as ${status.display_name} — expires in ${mins}:${String(secs).padStart(2, "0")}`;
+      identityEl.className = "approval-identity ok";
+      btn.disabled = false;
+    } else {
+      identityEl.textContent = "no human credential cached -- run scripts/presenter-login.sh";
+      identityEl.className = "approval-identity alert";
+      btn.disabled = true;
+    }
+  } catch (err) {
+    identityEl.textContent = `(could not check human credential: ${err})`;
+    identityEl.className = "approval-identity alert";
+    btn.disabled = true;
+  }
+}
+
 function showApprovalCard(text) {
   const card = $("approval-card");
   card.classList.remove("hidden");
   card.querySelector(".approval-text").textContent = text;
+  refreshHumanToken();
+  if (_humanTokenInterval) clearInterval(_humanTokenInterval);
+  _humanTokenInterval = setInterval(refreshHumanToken, 5000);
 }
 function hideApprovalCard() {
   $("approval-card").classList.add("hidden");
+  if (_humanTokenInterval) {
+    clearInterval(_humanTokenInterval);
+    _humanTokenInterval = null;
+  }
 }
 
 $("approve-btn").addEventListener("click", async () => {
-  const approver = $("approver-name").value.trim() || "anonymous";
   if (!state.pendingApproval) return;
   try {
     const resp = await j("POST", "/api/support/resume", {
       agent: state.agent,
       thread_id: state.pendingApproval.thread_id,
-      approved_by: approver,
     });
     hideApprovalCard();
     state.pendingApproval = null;
@@ -361,6 +399,33 @@ $("revoke-btn").addEventListener("click", async () => {
     applyEvents(resp.events || []);
   } catch (err) {
     addChatBubble(`(revoke failed: ${err})`, "agent", true);
+  }
+});
+
+// Makes scripts/04-verify-agentic-iam.sh's ceiling-misconfiguration test
+// clickable live: asks the picked agent's own real Vault token to attempt
+// its one escalation-target role (order-agent -> refund-writer,
+// refund-agent -> customer-pii-reader -- the storefront picks which, see
+// main.py's _CEILING_TARGET_ROLE). No new grant anywhere -- denied unless
+// the presenter has deliberately widened that agent's real policy in the
+// terminal right before clicking, in which case this succeeds live and
+// self-revokes.
+$("ceiling-probe-btn").addEventListener("click", async () => {
+  const resultEl = $("ceiling-probe-result");
+  const agent = $("ceiling-probe-agent").value;
+  resultEl.textContent = "probing…";
+  resultEl.className = "ceiling-probe-result";
+  try {
+    const resp = await j("POST", "/api/admin/ceiling-test", { agent });
+    const event = (resp.events || [])[0];
+    applyEvents(resp.events || []);
+    if (event) {
+      resultEl.textContent = event.message;
+      resultEl.className = `ceiling-probe-result ${event.allowed ? "alert" : "ok"}`;
+    }
+  } catch (err) {
+    resultEl.textContent = `probe failed: ${err}`;
+    resultEl.className = "ceiling-probe-result alert";
   }
 });
 
@@ -380,6 +445,8 @@ $("reset-btn").addEventListener("click", async () => {
   resetFlowState();
   $("chat-log").innerHTML = "";
   $("event-stream").innerHTML = "";
+  $("ceiling-probe-result").textContent = "";
+  $("ceiling-probe-result").className = "ceiling-probe-result";
   renderStageGraph();
   renderSuggestions();
   loadOrderHistory(); // reset reverts refunds -- the status column needs refreshing too
@@ -397,7 +464,7 @@ $("chat-customer-picker").addEventListener("change", (e) => {
   _setCustomerId(parseInt(e.target.value, 10));
 });
 
-// Two pickers, same options -- the Control Room tab's and the one inside
+// Two pickers, same options -- the Agentic Workflow tab's and the one inside
 // the chat widget, kept in sync the same way the customer pickers are.
 function _setAgent(mode) {
   state.agent = mode;
@@ -411,7 +478,7 @@ $("agent-picker").addEventListener("change", (e) => _setAgent(e.target.value));
 $("chat-agent-picker").addEventListener("change", (e) => _setAgent(e.target.value));
 
 // ---------- tabs ----------
-// "Shop" is the consumer-facing view; "Control Room" holds the demo-only
+// "Shop" is the consumer-facing view; "Agentic Workflow" holds the demo-only
 // controls (customer/agent pickers) plus the flow panel -- a real shopper
 // never sees those, so they don't live in the default view.
 
@@ -425,7 +492,7 @@ function switchTab(name) {
 $("tab-btn-shop").addEventListener("click", () => switchTab("shop"));
 $("tab-btn-flow").addEventListener("click", () => switchTab("flow"));
 
-// ---------- Control Room: stage graph + order history ----------
+// ---------- Agentic Workflow: stage graph + order history ----------
 
 // Shared per-event bookkeeping used by both a live turn (applyEvents) and
 // the one-time backfill from /api/state's log (pollState) -- one place
@@ -476,7 +543,7 @@ function applyEvents(events) {
 // way a log line would be.
 function _actorTag(e) {
   if (e.type === "identity") return "agent";
-  if (["auth_completed", "credential_issued", "credential_revoked", "approval_requested", "approval_granted"].includes(e.type)) return "vault";
+  if (["auth_completed", "credential_issued", "credential_revoked", "approval_requested", "approval_granted", "ceiling_probe", "delegation_requested", "delegation_granted"].includes(e.type)) return "vault";
   if (["refund_issued", "denied", "scope_violation"].includes(e.type)) return "postgres";
   return "agent";
 }
@@ -502,8 +569,12 @@ function logEvent(e) {
 
 function dotClassFor(e) {
   if (e.type === "denied" || e.type === "error" || e.type === "credential_revoked") return "critical";
-  if (e.type === "approval_requested") return "warning";
-  if (e.type === "credential_issued" || e.type === "refund_issued" || e.type === "approval_granted") return "good";
+  if (e.type === "approval_requested" || e.type === "delegation_requested") return "warning";
+  if (e.type === "credential_issued" || e.type === "refund_issued" || e.type === "approval_granted" || e.type === "delegation_granted") return "good";
+  // ceiling_probe: allowed=true is the alarming case (a real policy
+  // mistake the ceiling didn't catch) -- flagged critical, not good, even
+  // though nothing "failed." allowed=false is the safe, expected outcome.
+  if (e.type === "ceiling_probe") return e.allowed ? "critical" : "good";
   return "neutral";
 }
 
@@ -875,7 +946,10 @@ function renderStageDetail(cardId) {
   if (card.id === "vault-credential" && state.agent !== "insecure" && state.correlation) {
     corrBlock.classList.remove("hidden");
     $("corr-approver").textContent = state.correlation.approved_by || "—";
-    $("corr-spiffe").textContent = state.correlation.spiffe_id || "—";
+    // spiffe_id for the old child-token path; act.sub (OBO's actor claim)
+    // for real delegation -- same "which workload acted" slot, different
+    // identity mechanism behind it.
+    $("corr-spiffe").textContent = state.correlation.spiffe_id || (state.correlation.agent_sub && `act.sub=${state.correlation.agent_sub}`) || "—";
     $("corr-lease").textContent = shortLease(state.correlation.lease_id);
   } else {
     corrBlock.classList.add("hidden");

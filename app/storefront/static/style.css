@@ -85,7 +85,7 @@ select, input[type="text"] {
 
 /* ---- tabs -------------------------------------------------------------
    Only one of #tab-shop / #tab-flow is visible at a time (toggled via
-   .hidden by app.js's switchTab()) -- the Security Flow tab is where the
+   .hidden by app.js's switchTab()) -- the Agentic Workflow tab is where the
    demo-only customer/agent pickers live now, since a real shopper never
    sees those. */
 .tab-switcher { display: flex; gap: 4px; background: var(--page-plane); border-radius: 8px; padding: 3px; }
@@ -102,7 +102,7 @@ select, input[type="text"] {
 }
 .tab-btn.active { background: var(--surface-1); color: var(--text-primary); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
 
-/* The Security Flow tab is a wide, big-on-a-projector dashboard, not a
+/* The Agentic Workflow tab is a wide, big-on-a-projector dashboard, not a
    narrow stepper -- 5 stage columns need real estate, and this is the
    panel shown live on stage. Matches the Shop tab's own container cap
    (.layout's max-width) rather than a separate narrower one. */
@@ -117,6 +117,19 @@ select, input[type="text"] {
   border: 1px solid var(--border);
   border-radius: 10px;
 }
+
+.ceiling-probe-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.ceiling-probe-result { font-size: 0.85rem; color: var(--text-secondary); }
+.ceiling-probe-result.ok { color: var(--status-good); }
+.ceiling-probe-result.alert { color: var(--status-critical); font-weight: 600; }
 
 .order-history-wrap {
   background: var(--surface-1);
@@ -368,8 +381,12 @@ h2:first-child { margin-top: 0; }
   margin-top: 12px;
 }
 .approval-card.hidden { display: none; }
+.approval-identity { font-size: 0.85rem; margin-top: 8px; }
+.approval-identity.ok { color: var(--status-good); }
+.approval-identity.alert { color: var(--status-critical); font-weight: 600; }
 .approval-row { display: flex; gap: 8px; margin-top: 8px; }
 .approval-row input { flex: 1; }
+.approval-row button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .panel {
   display: flex;
@@ -401,7 +418,7 @@ h2:first-child { margin-top: 0; }
 .corr dt { color: var(--text-muted); }
 .corr dd { margin: 0; font-family: ui-monospace, monospace; word-break: break-all; }
 
-/* ---- Security Flow panel: dark stage-column diagram -------------------
+/* ---- Agentic Workflow panel: dark stage-column diagram -------------------
    A pulse travels card-to-card as real events arrive (app.js's
    playTurnAnimation) -- a paced replay of the actual event sequence, not
    a live network capture (the backend returns all of a turn's events in

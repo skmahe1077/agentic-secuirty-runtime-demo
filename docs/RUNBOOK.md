@@ -101,12 +101,12 @@ against the self-managed cluster -- treat as warnings if you ever touch the rele
 - **Vault token `display_name` sanitizes `:` and `/` into `-`.** A SPIFFE ID in
   `display_name` renders as `spiffe---nimbus-demo-ns-...` -- recognizable, not exact. Use
   `auth.metadata` for anything that needs to be literal (a slide, a query result, the
-  storefront's Control Room panel's Approval stage).
+  storefront's Agentic Workflow panel's Approval stage).
 - **A human-approved action's child token (`auth/token/create`) does not inherit the parent's
   identity.** Without deliberately copying `spiffe_id` into the child's `meta` and setting its
   `display_name` (see `vault.py`'s `VaultSession.get_db_credentials`), the audit entry for an
   approved refund shows only the approval fields and a generic "token-token" -- losing the
-  "which workload" half of beat 3's claim, and leaving the Control Room panel's Approval
+  "which workload" half of beat 3's claim, and leaving the Agentic Workflow panel's Approval
   stage with nothing to correlate.
 - **An agent's in-memory credential cache does not know about out-of-band revocations.**
   `scripts/reset.sh` calls `vault lease revoke -prefix database/creds/` directly; without also
@@ -184,7 +184,7 @@ silently reintroduced:
   `spire` profile -- Vault rejects the second registration outright. `mint_rar_jwt.py`'s probe
   JWT now carries its own `iss` claim (`spiffe://nimbus.demo/rar-probe`) matching a
   correspondingly distinct `issuer_id`.
-- **`identity_event()`'s one-shot flag never reset.** It was meant to announce the Control Room
+- **`identity_event()`'s one-shot flag never reset.** It was meant to announce the Agentic Workflow
   panel's Identity card once per chat TURN (so a multi-tool-call turn doesn't spam the log
   twice), but the flag never reset between turns -- after a pod's first-ever conversation, no
   later browser session would ever see that agent's Identity card light up again. Fixed:
@@ -197,6 +197,21 @@ silently reintroduced:
   Terraform state has no way to detect this drift, since the write bypasses the `vault_policy`
   resource entirely. Confirmed the hard way: adding the Agent Registry read grant below, then
   running this script, reverted it live under Terraform's nose. Keep the two in sync by hand.
+- **`nimbus_app_legacy`'s real Postgres password can silently drift from the
+  `db-static-creds` Kubernetes Secret.** Found during a full rehearsal (2026-10-17): the
+  Secret's `password` field was empty (likely lost in an earlier `kubectl apply` of
+  `k8s_manifests/agent-insecure/secret.yaml` run without `LEGACY_DB_PASSWORD` exported, which
+  `envsubst`s it to blank) -- fixed by re-applying that manifest with the documented value.
+  But the role's REAL password had also drifted from `app/db/03_legacy_role.sql`'s literal
+  (`LegacyStaticPassword123!`), confirmed with a throwaway `kubectl run ... psql` pod before
+  touching anything. Unlike the Vault-managed roles, nothing re-asserts this role's password on
+  its own -- there's no Terraform resource and no Vault rotation for it. Fixed via the same
+  RDS master-password temp-rotation pattern used for app/db writes elsewhere in this doc:
+  `aws rds modify-db-instance --master-user-password <temp>` -> `ALTER ROLE nimbus_app_legacy
+  WITH PASSWORD '...'` via a throwaway pod -> immediately `vault write -f
+  database/rotate-root/nimbus-rds` to hand control back. If beat 1 ever fails with "password
+  authentication failed" (not "no password supplied" -- that's the Secret-field-empty case),
+  check this first.
 
 ## Agent Registry on the storefront UI (2026-10-17)
 
@@ -204,7 +219,7 @@ Each secure agent's real Vault policy now also grants read-only access to its OW
 Registry entry (`agent-registry/registration/display-name/{its own name}` -- see
 `terraform/vault-config.tf`), read opportunistically off its already-authenticated client
 (never forcing a fresh login just for this) and surfaced via its `/status` endpoint. The
-Control Room panel's Identity cards show the real ceiling policy name as a tag (filtered to
+Agentic Workflow panel's Identity cards show the real ceiling policy name as a tag (filtered to
 drop Vault's own automatic `default`/`default-ceiling`). This makes beat 4's `vault read
 agent-registry/registration/...` terminal step visible live in the browser instead -- keep the
 terminal command as a presenter-only cross-check, not the primary demonstration.
@@ -271,6 +286,18 @@ keeping on stage: the Agent Registry registrations themselves (two agents, two c
 both readable and both genuinely different in scope), and the ceiling-vs-normal-token result
 below.
 
+**AMENDMENT (2026-10-17, later the same day) -- this finding was about an incomplete token,
+not about Vault.** `scripts/mint_rar_jwt.py`'s probe JWT carries only `{iss, sub, aud, iat,
+exp, authorization_details}` -- no `act` claim, no `jti`. Meanwhile the real, already-applied
+`spire` OAuth resource-server profile's own live state shows Vault defaults `actor_claim` to
+`act.sub` and `unique_id_claim` to `jti` server-side, whether anyone sets them or not. A request
+missing both required claims gets refused before any path/capability comparison ever happens --
+which is a structurally different failure than "RAR isn't enforced." See the real OBO spike
+below (`terraform/obo.tf`, `scripts/05-verify-obo.sh`): a correctly-shaped token -- with `act.sub`
+and `jti` -- against a profile with `actor_claim` set, DOES get RAR-checked, and the ceiling
+genuinely binds it. The 4a/4b/4c codes above are still accurate for what they tested (a bare,
+non-OBO-shaped Bearer JWT); they just don't mean what the original write-up concluded.
+
 **The second, newer question**, now that two agents with two different ceilings exist: does
 the Agent Registry ceiling cap anything on a **normal** `auth/spiffe`-issued token,
 independent of RAR/OBO entirely? Before `order-agent` existed, the one ceiling policy was
@@ -296,7 +323,123 @@ do, not what the agent's own ordinary Vault token can do. The real backstop agai
 misconfiguration tested here is still PostgreSQL's own grants (Vault's ACL policy is the thing
 that actually widened; the DB role `order-reader` was never touched by this test and still has
 no write grant). Frame beat 4 around registration + ceiling-as-declared-intent, not
-ceiling-as-live-safety-net.
+ceiling-as-live-safety-net -- **for a normal, non-OBO token.** See the next section: with a
+correctly-shaped OBO token, the ceiling IS a live safety net.
+
+## OBO -- what was actually tested (2026-10-17, real cluster, Vault 2.2.0+ent)
+
+Phase 0a of `~/.claude/plans/eventual-wandering-tower.md`: does Vault's resource-server mode
+enforce the three-way intersection (ceiling ∧ human's own policy ∧ RAR) on a correctly-shaped
+OBO token -- `act.sub` + `jti` present, `actor_claim` set on the profile -- entirely with a
+locally-signed throwaway key, no external IdP involved yet (`terraform/obo.tf`,
+`scripts/05-verify-obo.sh`). **Result: PASS, 5/5.**
+
+```
+T1 happy path (RAR=refund-writer, request=refund-writer):              HTTP 200
+T2 ceiling should catch this (RAR=customer-pii-reader, human allows):  HTTP 403
+T3 RAR path mismatch (RAR=refund-writer, request=order-reader):        HTTP 403
+T4 no-actor control (same as T1, no act/jti):                          HTTP 403
+T5 human policy narrowed (RAR=refund-writer, human policy revoked it): HTTP 403
+```
+
+T2's actual response body: `"2 errors occurred:\n\t* CEILING_POLICY_DENIED: actor ceiling
+policy denied permission\n\t* permission denied\n\n"` -- Vault's own error code names the
+mechanism. The human's policy (`human-approver-policy`, `terraform/obo.tf`) grants
+`customer-pii-reader`; the agent's ceiling (`agent-ceiling`, `terraform/agentic-iam.tf`,
+unchanged) does not. **This is the ceiling actually binding a delegated request** -- the exact
+thing the earlier "ceiling-as-declared-intent, not ceiling-as-live-safety-net" framing says it
+doesn't do for an ordinary token. Both are true; they're about different request shapes.
+
+Also resolved empirically (see `terraform/obo.tf`'s comments for detail): `identity/entity-alias`
+needs a `mount_accessor`, and an OAuth resource-server profile genuinely has one
+(`oauth-resource-server_root_<config_id>`, readable via `vault read
+sys/config/oauth-resource-server/<name>` -- not exposed by the Terraform resource itself, so
+read it back via a `vault_generic_secret` data source). The `vault_generic_endpoint` resource
+cannot be used to create the alias directly -- `identity/entity-alias`'s base path is
+POST-only, and Terraform's read-after-write fails with `405 unsupported operation`; the POST
+itself succeeds, so the alias ends up live in Vault but untracked by Terraform until imported
+under the correct `vault_identity_entity_alias` resource address.
+
+**What this does NOT prove**: whether IBM Verify (or any real IdP) can actually mint a token
+shaped this way via RFC 8693 token exchange -- that's a separate, still-open question (Phase
+0b), and this result holds regardless of its answer, since Phase 0a's signing key is entirely
+local. See the fallback plan in `eventual-wandering-tower.md` if Phase 0b doesn't pan out: the
+Vault-side mechanics demonstrated here are identical either way.
+
+**Phase 0b result (2026-10-18): checked against IBM's own published docs, not tested live.**
+`docs.verify.ibm.com`'s OAuth 2.0 and token-exchange pages confirm the grant type
+(`urn:ietf:params:oauth:grant-type:token-exchange`) and that delegation mode exists
+conceptually (actor_token + subject_token, with a `may_act` claim pre-set on the SUBJECT token
+naming the allowed actor -- a different mechanism than this repo's local spike assumed, which
+just presents both tokens and expects Verify to figure it out). But `authorization_details`
+(RFC 9396 RAR) is **never mentioned anywhere** in either page -- not "undocumented how to use
+it," absent entirely, across the main OAuth page and the dedicated token-exchange page, and no
+worked example of delegation mode exists at all. That's a vendor-documentation-level signal,
+not just "untested," so a full app-registration spike wasn't run live -- the cost (console
+setup, a human login, client credentials) wasn't worth it against docs that never describe the
+feature this needs. **Decision: ship Phase 1 against the Phase 0a local throwaway signer
+instead of a real IdP.** The on-stage line: *"this demo signs the OBO token locally because our
+tenant's documented token-exchange flow doesn't support RAR; in production your IdP signs this,
+and what Vault enforces on receipt is identical to what you just saw."* If a real IdP with RAR
+support on this grant becomes available later, only `app/agent/src/agent/obo.py`'s signing step
+needs to change -- everything on the Vault side (the profile, the ceiling, the policies) is
+already real.
+
+**Phase 1 shipped (2026-10-18): wired into the app, confirmed live on the real cluster.**
+Beat 3's old free-text "type a name" approval is gone -- replaced end-to-end with the real OBO
+flow above. `scripts/presenter-login.sh` caches a human identity once
+(`POST /api/admin/human-token`); the Agentic Workflow's approval card shows an identity chip
+("Approve as X -- expires in Nm") instead of a text box, disabled outright if nothing is
+cached. Clicking Approve signals the storefront to inject the cached `sub` into
+`/api/support/resume`'s `subject_token` field; `app/agent/src/agent/actions.py`'s
+`issue_refund` calls `obo.exchange()` to mint a fresh delegation JWT per request (never reused
+-- replay protection via `jti`), then `VaultSession.get_db_credentials(obo_token=...)` presents
+it to Vault directly (bypassing `hvac`, which always sends `X-Vault-Token` rather than the
+`Authorization: Bearer` resource-server mode needs). Two new events,
+`delegation_requested`/`delegation_granted`, make the exchange visible in the event stream.
+Confirmed live: a real `>£100` refund through the full chat -> approval -> resume chain
+produced the complete real event chain (`approval_granted` -> `identity` ->
+`delegation_requested` -> `delegation_granted` -> `auth_completed` -> `credential_issued` ->
+`refund_issued`), and `scripts/03-verify.sh` + the ceiling-probe cycle both stayed green
+afterward. **One empirical side-finding**: the issued DB lease's `ttl_seconds` came back ~50-60s
+on the delegated path, not the DB role's declared `default_ttl = 180` -- Vault appears to cap
+the lease to the authenticating token's own remaining validity (`obo.exchange()`'s default
+`ttl_seconds=60`), tightening the window further on delegated requests specifically. Not
+investigated deeper; noted here in case it matters for a future TTL tuning pass.
+`app/agent/src/agent/langchain_engine.py`'s `handle_resume` accepts (but ignores)
+`subject_token` for interface parity -- OBO was not wired into the LangChain path, since that
+engine's `interrupt()`-based resume already carried its own unvalidated-live caveat before this
+work started.
+
+**This test is now clickable live, for BOTH agents, not just run from this script.** The
+Agentic Workflow's agent select + "⛰ Probe this agent's ceiling" button
+(`POST /api/admin/ceiling-test` on the storefront -> `POST /debug/ceiling-probe` on the
+targeted agent -> `VaultSession.probe_ceiling(target_role)` in `app/agent/src/agent/vault.py`)
+asks the agent's own, already-authenticated client to attempt its one escalation-target role,
+with zero new Vault grant added anywhere for the button itself -- it only works because Vault
+re-evaluates a named ACL policy's *content* on every request against any token that already
+carries that policy name, so a live `vault policy write` widen immediately changes what an
+agent's existing token can do, no re-login needed.
+
+- **order-agent -> `refund-writer`**: the same widen heredoc as this script's step 5, split
+  out into `bash scripts/demo-beat4-ceiling.sh widen order` so it can be paced against a live
+  click instead of running widen->test->revert in one shot; `revert order` restores the narrow
+  policy.
+- **refund-agent -> `customer-pii-reader`**: refund-agent already legitimately holds
+  `refund-writer` (there's no DB role above it to escalate into), so its plausible-mistake
+  target is PII exposure instead. `customer-pii-reader` is a new
+  `vault_database_secret_backend_role` (`terraform/vault-config.tf`) scoped to `SELECT` on
+  `customers` only -- the table every other role in this repo is deliberately denied (see
+  `app/db/01_schema.sql`'s own comment). Never in `agent-support`'s real policy outside the
+  deliberate test window. `bash scripts/demo-beat4-ceiling.sh widen refund` /
+  `revert refund` drive it the same way.
+
+Cold, either probe is denied (logged as a `ceiling_probe` event, `allowed: false`); after the
+matching `widen`, clicking again succeeds live and self-revokes the credential it just proved
+it could mint (`allowed: true`); after `revert`, a third click confirms it's denied again. The
+privileged widen/revert steps themselves deliberately stay in that script/the presenter's
+terminal, not in the app -- giving the storefront a standing Vault credential to run them
+itself would be the exact anti-pattern this whole demo argues against.
 
 ## Self-managed constraints that shape this build
 
@@ -319,8 +462,10 @@ most of those restrictions, but introduces a different set:
 - **The root token never expires** (see above) -- unlike HCP's 6-hour admin token, there is no
   "regenerate it right before walking on stage" step any more.
 - **The storefront ALB's security group is the only access control on `/api/admin/*`.** There
-  is no application-level auth on `/api/admin/reset` or `/api/admin/revoke` -- both are buttons
-  in the UI, both are reachable by anyone who can reach the ALB. Narrow
+  is no application-level auth on `/api/admin/reset`, `/api/admin/revoke`, or
+  `/api/admin/ceiling-test` -- all three are buttons in the UI, all three are reachable by
+  anyone who can reach the ALB (the ceiling-test one is harmless by construction -- it adds no
+  grant and self-revokes anything it mints -- but still worth naming here). Narrow
   `var.alb_inbound_cidrs` to the presenter's current IP (`curl -s ifconfig.me`) right before
   the talk, and verify from the actual venue network during setup -- conference Wi-Fi can be
   CGNAT'd or simply different from the IP you tested with earlier. Keep widening the allowlist
@@ -383,7 +528,7 @@ it elapses -- that's expected, not a leak.
    500 -- proves the InsufficientPrivilege catch in `actions.py`'s `issue_refund` actually
    fires.
 6. On the ALB URL: refund an order through the chatbot as an approved action, and confirm the
-   Control Room panel's **Approval** stage shows the approver, SPIFFE ID, and lease ID
+   Agentic Workflow panel's **Approval** stage shows the approver, SPIFFE ID, and lease ID
    together -- and that it persists after a subsequent revoke of the Credential stage (the
    credential is ephemeral, the record of who authorized it is not).
 7. Confirm the ALB security-group allowlist works in both directions: the site loads from the

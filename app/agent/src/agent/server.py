@@ -49,11 +49,15 @@ def chat(req: ChatRequest):
 class ResumeRequest(BaseModel):
     thread_id: str = "demo"
     approved_by: str
+    # Real OBO delegation -- see app/storefront/main.py's cached
+    # human-token and deterministic_engine.py's handle_resume. None means
+    # fall back to the old free-text-metadata approval.
+    subject_token: str | None = None
 
 
 @app.post("/resume")
 def resume(req: ResumeRequest):
-    result = engine.handle_resume(req.thread_id, req.approved_by)
+    result = engine.handle_resume(req.thread_id, req.approved_by, req.subject_token)
     return {
         "reply": result.reply,
         "events": result.events,
@@ -88,6 +92,25 @@ def vault_forget():
 @app.get("/status")
 def status():
     return session.status()
+
+
+class CeilingProbeRequest(BaseModel):
+    # order-agent's test escalates into "refund-writer" (more money
+    # privilege); refund-agent's test escalates into "customer-pii-reader"
+    # (there's no role above refund-writer to escalate into, so the
+    # plausible mistake for an agent that already moves money is PII
+    # exposure instead). The storefront picks the right default per agent
+    # -- this field lets it say so explicitly rather than this endpoint
+    # guessing from its own identity.
+    target_role: str = "refund-writer"
+
+
+@app.post("/debug/ceiling-probe")
+def ceiling_probe(req: CeilingProbeRequest = CeilingProbeRequest()):
+    """Safe to call at any time -- see VaultSession.probe_ceiling(). Lets
+    the Agentic Workflow UI show scripts/04-verify-agentic-iam.sh's ceiling-
+    misconfiguration test live, driven by this agent's own real token."""
+    return session.probe_ceiling(req.target_role)
 
 
 @app.get("/healthz")

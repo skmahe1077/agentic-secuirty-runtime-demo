@@ -70,7 +70,7 @@ resource "vault_mount" "database" {
 resource "vault_database_secret_backend_connection" "nimbus" {
   backend       = vault_mount.database.path
   name          = "nimbus-rds"
-  allowed_roles = ["refund-writer", "order-reader"]
+  allowed_roles = ["refund-writer", "order-reader", "customer-pii-reader"]
 
   postgresql {
     connection_url = "postgresql://{{username}}:{{password}}@${aws_db_instance.nimbus.address}:5432/${var.db_name}?sslmode=require"
@@ -156,7 +156,41 @@ resource "vault_database_secret_backend_role" "order_reader" {
   max_ttl     = 600 # 10 minutes
 }
 
-# ---- policy ---------------------------------------------------------------
+# refund-agent already holds the money-moving role (refund-writer) -- the
+# plausible operator mistake worth testing on IT isn't "more money
+# privilege" (there's no role above refund-writer), it's PII exposure:
+# app/db/01_schema.sql's own comment calls `customers` "PII, never granted
+# to any agent role." This role is the deliberate-mistake escalation target
+# for the refund-agent half of the live ceiling probe
+# (scripts/demo-beat4-ceiling.sh widen refund) -- never included in
+# agent-support's real policy except during that deliberate test window.
+resource "vault_database_secret_backend_role" "customer_pii_reader" {
+  backend = vault_mount.database.path
+  name    = "customer-pii-reader"
+  db_name = vault_database_secret_backend_connection.nimbus.name
+
+  creation_statements = [
+    <<-SQL
+    CREATE ROLE "{{name}}" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';
+    GRANT CONNECT ON DATABASE ${var.db_name} TO "{{name}}";
+    GRANT USAGE ON SCHEMA public TO "{{name}}";
+    GRANT SELECT ON customers TO "{{name}}";
+    SQL
+  ]
+  revocation_statements = [
+    <<-SQL
+    REVOKE ALL PRIVILEGES ON customers FROM "{{name}}";
+    REVOKE USAGE ON SCHEMA public FROM "{{name}}";
+    REVOKE CONNECT ON DATABASE ${var.db_name} FROM "{{name}}";
+    DROP ROLE IF EXISTS "{{name}}";
+    SQL
+  ]
+
+  default_ttl = 180 # 3 minutes
+  max_ttl     = 600 # 10 minutes
+}
+
+# ---- policy -----------------------------------------------------------
 # sys/leases/revoke and auth/token/create are NOT implied by read access to
 # database/creds/* -- both were missing in the first draft of this policy
 # and both failed hard during local testing (see docs/RUNBOOK.md). Do not

@@ -20,17 +20,20 @@
 # be tested at all" -- scripts/04-verify-agentic-iam.sh is the real
 # assertion against the real cluster.
 #
-# Deliberately does NOT attempt the on-behalf-of (OBO) / token-exchange
-# half of Agentic IAM. `2.2.0-ent` is now a published GA image (the
-# "only at rc1" blocker is gone), but OBO still needs an external IdP
-# actually capable of RFC 8693 token exchange with `act`/`may_act` claims,
-# which among HashiCorp's documented providers is only IBM Verify (Auth0's
-# documented path is NOT real OBO -- it's a single-identity
-# authorization_code + PAR/RAR flow, and Auth0's RAR/PAR support itself
-# needs an Enterprise-tier tenant). Both are sales-gated products on top of
-# an already-gated license. This stays scoped to what needs no human-
-# delegation identity exchange: register the agent, cap it with a ceiling
-# policy, and enforce a per-request RAR constraint.
+# UPDATE (2026-10-17): the Vault-side OBO mechanics ARE now confirmed
+# working -- see terraform/obo.tf and docs/RUNBOOK.md's "OBO -- what was
+# actually tested" section. A correctly-shaped delegated token (`act.sub`
+# + `jti`, against a resource-server profile with `actor_claim` set) gets
+# RAR-checked AND ceiling-checked for real (`CEILING_POLICY_DENIED` is a
+# real Vault error code, not a hypothetical). What's still open is who
+# SIGNS that token in production: this repo's spike uses a throwaway
+# local key, not a real external IdP. Among HashiCorp's documented
+# providers, real RFC 8693 token exchange with `act`/`may_act` claims is
+# only IBM Verify (Auth0's documented path is NOT real OBO -- it's a
+# single-identity authorization_code + PAR/RAR flow, and Auth0's RAR/PAR
+# support itself needs an Enterprise-tier tenant); both are sales-gated
+# products on top of an already-gated license. See
+# ~/.claude/plans/eventual-wandering-tower.md's Phase 0b for that half.
 
 resource "vault_identity_entity" "agent_secure" {
   name = "agent-${var.agent_service_account}"

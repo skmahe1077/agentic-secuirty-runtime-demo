@@ -159,7 +159,7 @@ class DeterministicEngine:
         )
         return AgentTurnResult(reply=reply, events=events)
 
-    def handle_resume(self, thread_id: str, approved_by: str) -> AgentTurnResult:
+    def handle_resume(self, thread_id: str, approved_by: str, subject_token: str | None = None) -> AgentTurnResult:
         self.session.begin_turn()
         pending = self._pending.pop(thread_id, None)
         if pending is None:
@@ -180,5 +180,6 @@ class DeterministicEngine:
             issued_by=self.settings.agent_name,
             approved_by=approved_by,
             correlation_id=pending["correlation_id"],
+            subject_token=subject_token,
         )
         return AgentTurnResult(reply=reply, events=events + action_events)

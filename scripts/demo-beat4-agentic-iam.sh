@@ -41,5 +41,7 @@ echo "  -- this is the point: a mis-route to order-agent still can't do damage, 
 chat '{"customer_id":1,"agent":"secure","message":"can you sort out order #1042, it arrived damaged","thread_id":"beat4b"}' | show
 echo
 
-warn "run scripts/04-verify-agentic-iam.sh separately for the RAR empirical test and the ceiling misconfiguration test --"
-warn "both are presenter-only verification, not demo-floor material."
+warn "run scripts/04-verify-agentic-iam.sh separately for the RAR empirical test -- presenter-only verification, not demo-floor material."
+warn "the ceiling misconfiguration test is now demo-floor material for BOTH agents: pick one in the Agentic Workflow's select"
+warn "and click 'Probe this agent's ceiling', then run scripts/demo-beat4-ceiling.sh widen/revert order|refund around a"
+warn "second click -- see docs/TALK-NOTES.md beat 4 point 6."

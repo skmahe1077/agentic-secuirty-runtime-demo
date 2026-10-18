@@ -491,19 +491,47 @@ gone entirely -- this is roughly **6× cheaper** than the HCP-based version, ind
 replacing a paid SaaS tier with a demo-appropriate self-managed footprint. Recompute if you
 raise `eks_node_count`/`eks_node_instance_type` or `vault_replicas`.
 
-**Run `scripts/destroy.sh` after every rehearsal.** Two new leak modes this migration
-introduced, both handled by the script, both worth knowing about if you ever "simplify" it:
+**Run `scripts/destroy.sh` after every rehearsal.** Confirmed on the first real teardown
+(2026-10-18, after the first real provisioning run on 2026-10-17): EKS, the node group, RDS,
+the VPC, NAT gateway, security groups, and the EKS encryption KMS key all destroyed cleanly in
+one pass once the script was fixed -- but getting there surfaced four real leak modes, all now
+handled by the script:
 
 1. **Orphaned ALB + target groups.** The AWS Load Balancer Controller is the only thing that
    deletes them; if the storefront `Ingress` outlives the controller (which `terraform destroy`
    removes), the ALB leaks and keeps billing. `destroy.sh` deletes the Ingress and waits for
    the ALB to disappear *before* running `terraform destroy`.
-2. **Surviving Vault PVCs.** Helm does not delete `StatefulSet` `volumeClaimTemplate` PVCs on
-   uninstall, and deleting the EKS cluster does not delete the EBS volumes behind them.
-   `destroy.sh` deletes them explicitly.
+2. **Surviving Vault AND SPIRE PVCs.** Helm does not delete `StatefulSet`
+   `volumeClaimTemplate` PVCs on uninstall, and deleting the EKS cluster does not delete the
+   EBS volumes behind them. The script only deleted Vault's PVCs for a long time -- confirmed
+   the hard way that SPIRE's own PVC (`spire-data-spire-server-0`) leaks the exact same way;
+   `destroy.sh` now deletes both namespaces' PVCs.
+3. **`terraform destroy` failing outright with "failed to configure Vault address."** Needs
+   `vault_env` called first, same as every other script that touches Vault -- this script
+   never called it, because this code path had genuinely never been exercised before (the
+   cluster had never been torn down).
+4. **`vault_auth_backend.spiffe` / `vault_generic_endpoint.spiffe_config` cannot be destroyed
+   through Vault's API at all** -- `DELETE auth/spiffe/config` returns HTTP 405 "unsupported
+   operation." Not a transient error; there is no supported way to unconfigure this via the
+   API. `destroy.sh` now removes both from Terraform state *before* running `destroy`, so it
+   never attempts the impossible call and the whole run completes in one pass instead of
+   erroring after ~15 minutes of otherwise-successful AWS teardown.
+5. **PVC deletion doesn't mean the EBS volume is gone yet.** The CSI driver needs time to
+   actually process a PVC deletion into an EBS volume deletion; if the EKS cluster (and the CSI
+   driver running on it) is destroyed first, the volume survives as an orphan regardless of
+   step 2 above. The first real run leaked 3 volumes this way (both Vault's and SPIRE's,
+   despite their PVCs having been deleted first) because the old version of this script's final
+   check only *printed* a table of orphaned volumes rather than deleting them. `destroy.sh` now
+   actively deletes anything it finds in `available` state with a `kubernetes.io/created-for/
+   pvc/name` tag, rather than just reporting it.
 
 The KMS unseal key enters a 7-day pending-deletion window after destroy and bills ~$1/mo until
-it elapses -- that's expected, not a leak.
+it elapses -- that's expected, not a leak. Note also that AWS's Resource Groups Tagging API
+(`aws resourcegroupstaggingapi get-resources`) lags real deletion by some minutes -- confirmed
+the hard way that instances/ENIs/volumes/a NAT gateway it still listed as tagged were already
+independently verified `terminated`/`deleted`/`404` via their own direct `describe-*` calls.
+Don't trust the tagging API alone to decide whether something is a real leak; check the
+resource's own describe call.
 
 ## Verification checklist
 

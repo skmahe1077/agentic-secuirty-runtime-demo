@@ -19,8 +19,17 @@ STOREFRONT_DB_PASSWORD="${STOREFRONT_DB_PASSWORD:?set STOREFRONT_DB_PASSWORD -- 
 vault_env
 
 log "confirming the dedicated storefront DB account works BEFORE rotating the account Vault owns"
+# NOT a local `psql` -- confirmed live (2026-10-19): RDS is deliberately
+# `publicly_accessible = false`, so a presenter's own laptop (the normal
+# place to run this script from) can't reach it directly at all; the
+# connection just hangs until it times out. Every other script in this
+# repo that needs to run SQL against RDS already uses a throwaway
+# in-cluster pod for exactly this reason -- this preflight check was the
+# one place that didn't, because it had never actually been run from
+# outside the cluster before.
 RDS_ENDPOINT="$(tf_output rds_endpoint)"
-PGPASSWORD="$STOREFRONT_DB_PASSWORD" psql -h "$RDS_ENDPOINT" -U nimbus_storefront -d nimbus -c "SELECT 1;" >/dev/null \
+kubectl run pgpreflight --rm -i --restart=Never --image=postgres:16 --env="PGPASSWORD=$STOREFRONT_DB_PASSWORD" --command -- psql \
+  "host=$RDS_ENDPOINT port=5432 dbname=nimbus user=nimbus_storefront sslmode=require" -c "SELECT 1;" >/dev/null 2>&1 \
   || die "nimbus_storefront cannot reach RDS -- rotating root now would leave nothing but Vault able to log in. Apply app/db/04_storefront_role.sql first."
 
 warn "about to rotate the RDS master password Vault uses -- after this, only Vault knows it."

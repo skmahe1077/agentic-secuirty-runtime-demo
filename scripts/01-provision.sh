@@ -12,6 +12,14 @@
 #     cluster to exist first.
 # This ordering is a real constraint of the architecture, not script
 # laziness -- see docs/RUNBOOK.md.
+#
+# All three `terraform apply` calls below use -auto-approve. Confirmed the
+# hard way (2026-10-19, first re-provision after a full teardown): without
+# it, a non-interactive run (no human present to type "yes" at an
+# unpredictable moment mid-script) just gets "error asking for approval:
+# EOF" and aborts before creating anything. Running this script at all is
+# already the deliberate, explicit action -- same reasoning as
+# scripts/destroy.sh's -auto-approve.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
@@ -33,17 +41,32 @@ aws secretsmanager describe-secret --secret-id "$VAULT_LICENSE_SECRET_NAME" >/de
 
 log "Phase A -- AWS infra (VPC, EKS, RDS, KMS, IRSA roles) -- no kubernetes/helm/vault resources yet"
 terraform -chdir="$TF_DIR" init
-terraform -chdir="$TF_DIR" apply \
+# kubernetes_annotations.gp2_default MUST be in this phase, not left for
+# the later full apply (Phase F) -- confirmed live (2026-10-19, second
+# provisioning run): SPIRE's PVC (Phase D, which runs before Phase F)
+# stays Pending forever ("unbound immediate PersistentVolumeClaims")
+# without it. This is the exact "gp2 isn't actually the cluster-default
+# StorageClass" gotcha docs/RUNBOOK.md already documents for Vault's own
+# PVC -- it turns out to apply to SPIRE's PVC too, and SPIRE needs it
+# earlier in the phase order than Vault does.
+terraform -chdir="$TF_DIR" apply -auto-approve \
   -target=module.vpc -target=module.eks -target=module.ebs_csi_irsa \
   -target=aws_db_subnet_group.nimbus -target=aws_security_group.rds -target=aws_db_instance.nimbus \
   -target=aws_kms_key.vault_unseal -target=aws_kms_alias.vault_unseal -target=aws_iam_policy.vault_unseal \
   -target=module.vault_irsa -target=module.lbc_irsa \
-  -target=aws_secretsmanager_secret.vault_init
+  -target=aws_secretsmanager_secret.vault_init \
+  -target=kubernetes_annotations.gp2_default
 
-aws eks update-kubeconfig --region "$(tf_output aws_region)" --name "$(tf_output eks_cluster_name)"
+# NOT `tf_output aws_region` -- confirmed live (2026-10-19, second
+# provisioning run): a bare `var.X`-only output never gets written during
+# a targeted apply (same class of bug terraform/outputs.tf's
+# vault_k8s_namespace comment already documents for a different output;
+# aws_region itself was never fixed the same way). This output has a real
+# dependency into Phase A's targeted module.eks, so it populates reliably.
+eval "$(tf_output eks_update_kubeconfig_command)"
 
 log "Phase B -- platform charts: Vault Enterprise + the AWS Load Balancer Controller"
-terraform -chdir="$TF_DIR" apply \
+terraform -chdir="$TF_DIR" apply -auto-approve \
   -target=kubernetes_namespace.vault -target=kubernetes_secret.vault_license \
   -target=helm_release.vault -target=helm_release.aws_load_balancer_controller
 log "vault-0 will show 0/1 Ready until Phase C -- that's expected, not a failure"
@@ -67,12 +90,19 @@ log "Phase E -- fetching SPIRE's JWKS bundle for Vault's static config"
 
 log "Phase F -- full terraform apply (vault-config.tf + agentic-iam.tf are resolvable now)"
 vault_env
-terraform -chdir="$TF_DIR" apply
+terraform -chdir="$TF_DIR" apply -auto-approve
 
 log "Phase G -- build and push images, deploy the app"
 aws ecr get-login-password | docker login --username AWS --password-stdin "${IMAGE_REGISTRY%%/*}"
-docker build -f "$REPO_ROOT/app/storefront/Dockerfile" -t "$IMAGE_REGISTRY/storefront:$IMAGE_TAG" "$REPO_ROOT"
-docker build -f "$REPO_ROOT/app/agent/Dockerfile" -t "$IMAGE_REGISTRY/agent:$IMAGE_TAG" "$REPO_ROOT"
+# --platform linux/amd64 is NOT optional -- confirmed live, repeatedly
+# (most recently 2026-10-19): a plain `docker build` on Apple Silicon
+# produces an arm64 image, which crashes every pod on these x86_64 EKS
+# nodes with "exec format error". docs/RUNBOOK.md already documented this
+# as a confirmed gotcha from the first provisioning run; it was only ever
+# fixed by hand in the terminal that session, never written back into
+# this script -- hence it recurring here.
+docker build --platform linux/amd64 -f "$REPO_ROOT/app/storefront/Dockerfile" -t "$IMAGE_REGISTRY/storefront:$IMAGE_TAG" "$REPO_ROOT"
+docker build --platform linux/amd64 -f "$REPO_ROOT/app/agent/Dockerfile" -t "$IMAGE_REGISTRY/agent:$IMAGE_TAG" "$REPO_ROOT"
 docker push "$IMAGE_REGISTRY/storefront:$IMAGE_TAG"
 docker push "$IMAGE_REGISTRY/agent:$IMAGE_TAG"
 

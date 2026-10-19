@@ -95,12 +95,14 @@ a silent failure.
    verification via `scripts/03-verify.sh`, not shown on stage.)
 
 **One sentence on what's not real here, if asked**: there's no actual IdP in this loop. IBM
-Verify was checked -- its documented token-exchange grant (`docs.verify.ibm.com`) never
-mentions RFC 9396 `authorization_details` at all, not "untested," genuinely absent from the
-vendor's own docs -- so this demo signs the delegated token itself
-(`app/agent/src/agent/obo.py`), with the same throwaway key Vault's resource-server profile was
-given. What Vault enforces on receipt is identical either way; only the signer changes. Say so
-plainly -- it's a defensible shortcut, not a thing to hide.
+Verify was tested live, not just read about: `sub`/`act.sub` delegation genuinely works, but
+`authorization_details` (RFC 9396 RAR) is silently dropped from the exchanged token every
+time -- not rejected, not an error, just absent. Confirmed against a real tenant
+(`docs/RUNBOOK.md`'s Phase 0b update), not inferred from docs. So this demo signs the delegated
+token itself (`app/agent/src/agent/obo.py`), with the same throwaway key Vault's resource-server
+profile was given. What Vault enforces on receipt is identical either way; only the signer
+changes. Say so plainly -- it's a defensible shortcut, not a thing to hide, and you can say "we
+tested this against a real tenant" rather than "we read the docs."
 
 Run with `scripts/demo-beat3.sh "<your name>"` as a rehearsal harness for the chat/approval
 flow itself; on stage, perform this by clicking in the browser. See

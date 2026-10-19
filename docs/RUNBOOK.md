@@ -385,6 +385,34 @@ support on this grant becomes available later, only `app/agent/src/agent/obo.py`
 needs to change -- everything on the Vault side (the profile, the ceiling, the policies) is
 already real.
 
+**UPDATE (2026-10-19): tested live against a real tenant (`devopstronaut`), not just read from
+docs -- the prediction above is now confirmed empirically.** Two real app registrations were
+needed, not one: a client whose only job is to authenticate the human (ROPC) and the agent's
+own client (`client_credentials` + performs the exchange as `actor`). The first attempt used
+one client for both halves and got `request_forbidden: "Clients are not allowed to perform a
+token exchange on their own tokens"` -- IBM Verify refuses to exchange a token for itself when
+both the subject and actor are associated with the same client, confirmed by testing the
+subject token alone (same error, no actor_token at all). With two genuinely separate clients,
+the exchange succeeded (HTTP 200) and the resulting JWT decoded to:
+
+```
+sub:   6470002374            (the human)
+act:   {"sub": "<agent client id>"}   (the agent -- real delegation, not asserted)
+aud:   ["<agent client id>"]         (NOT "vault" -- no audience/resource scoping happened)
+authorization_details: ABSENT        (silently dropped, not rejected, no error)
+```
+
+So: real OBO delegation (`sub`/`act.sub`) **is genuine and working** on IBM Verify -- that part
+of the mechanism is not a local-signer fiction, it's something a real IdP actually does. But
+RAR (`authorization_details`) is confirmed, not just inferred, to never survive this grant on
+this tenant -- it isn't rejected or errored, it's just silently stripped from the output token.
+This is the exact outcome the documentation review predicted; now it's measured, not assumed.
+Decision stands: Phase 1 still ships against the local signer, since RAR is the piece that
+makes the ceiling-vs-delegated-request contrast (beat 4's callback to beat 3) actually true --
+without it, Vault's resource-server profile has nothing to check the request against beyond
+`act.sub`/`jti` presence, and the ceiling-blocks-a-delegated-request demonstration wouldn't
+hold on a token minted this way.
+
 **Phase 1 shipped (2026-10-18): wired into the app, confirmed live on the real cluster.**
 Beat 3's old free-text "type a name" approval is gone -- replaced end-to-end with the real OBO
 flow above. `scripts/presenter-login.sh` caches a human identity once

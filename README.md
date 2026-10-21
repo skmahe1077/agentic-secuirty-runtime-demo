@@ -35,6 +35,11 @@ themselves.
 
 ## Architecture
 
+![AWS architecture: VPC with ALB, EKS cluster (nimbus/agents/spire-mgmt/vault namespaces), RDS Postgres, and AWS KMS auto-unseal for Vault](docs/images/architecture.png)
+
+<details>
+<summary>Mermaid source (text fallback)</summary>
+
 ```mermaid
 flowchart TB
     Audience["🎤 Audience<br/>watches on screen"] --> Browser["Browser"]
@@ -75,6 +80,8 @@ flowchart TB
     RefundAgent -->|"auth/spiffe login"| Vault
     Vault -->|"mints scoped, TTL'd credential<br/>(order-reader / refund-writer)"| RDS
 ```
+
+</details>
 
 `order-agent` and `refund-agent` are genuinely separate SPIFFE identities and Vault-scoped DB
 roles -- not one identity with a UI toggle. The storefront decides which one handles a "secure"

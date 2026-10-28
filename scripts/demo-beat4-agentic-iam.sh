@@ -10,6 +10,17 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
+# Needed for the `vault read agent-registry/...` calls below -- every
+# other script in this repo that calls the Vault CLI directly
+# (03-verify.sh, 04-verify-agentic-iam.sh, demo-beat4-ceiling.sh) calls
+# vault_env first; this one didn't, so running it standalone (not
+# chained after a script that happened to export VAULT_ADDR/VAULT_TOKEN
+# into the same shell) silently printed the cluster-unreachable warning
+# below even on a fully healthy cluster. Confirmed live during the
+# 2026-10-28 provisioning run's checklist item 9 (back-to-back demo-beat
+# run) -- see docs/RUNBOOK.md.
+vault_env
+
 chat() { curl -s -X POST "$STOREFRONT_URL/api/support/chat" -H 'content-type: application/json' -d "$1"; }
 show() { python3 -c "
 import sys, json

@@ -44,6 +44,30 @@ def _decode_jwt_payload(token: str) -> dict:
         return {}
 
 
+# The real, per-role grant shape for the storefront's Agentic Workflow
+# panel -- must stay in sync with terraform/vault-config.tf's three
+# vault_database_secret_backend_role creation_statements. Keyed by Vault
+# DB role name (VAULT_DB_ROLE / s.vault_db_role), not by agent, since the
+# same session class serves both refund-agent (refund-writer) and
+# order-agent (order-reader).
+_DB_ROLE_SCOPES: dict[str, list[dict]] = {
+    "refund-writer": [
+        {"resource": "orders", "action": "SELECT/UPDATE", "allowed": True},
+        {"resource": "refunds", "action": "INSERT", "allowed": True},
+        {"resource": "customers", "action": "SELECT", "allowed": False},
+    ],
+    "order-reader": [
+        {"resource": "orders", "action": "SELECT", "allowed": True},
+        {"resource": "products", "action": "SELECT", "allowed": True},
+        {"resource": "refunds", "action": "INSERT", "allowed": False},
+        {"resource": "customers", "action": "SELECT", "allowed": False},
+    ],
+    "customer-pii-reader": [
+        {"resource": "customers", "action": "SELECT", "allowed": True},
+    ],
+}
+
+
 class StaticCredentialSession:
     """agent-insecure: a long-lived password, no identity, no scoping."""
 
@@ -334,11 +358,17 @@ class VaultSession:
             "lease_role": s.vault_db_role,
             "expires_at": now + ttl,
             "ttl_seconds": ttl,
-            "scope": [
-                {"resource": "orders", "action": "SELECT", "allowed": True},
-                {"resource": "refunds", "action": "INSERT", "allowed": True},
-                {"resource": "customers", "action": "SELECT", "allowed": False},
-            ],
+            # Role-dependent, not a fixed shape -- this was previously
+            # hardcoded to refund-writer's grants regardless of
+            # s.vault_db_role, which falsely showed order-agent's
+            # credential (order-reader) as able to INSERT into refunds in
+            # the Agentic Workflow panel. order-reader has no such grant
+            # (see terraform/vault-config.tf's order_reader role) --
+            # confirmed empirically: a real order-reader credential gets
+            # "permission denied for table refunds" on INSERT. Keep this
+            # in sync with vault-config.tf's three
+            # vault_database_secret_backend_role creation_statements.
+            "scope": _DB_ROLE_SCOPES.get(s.vault_db_role, []),
             # Surfaced so the storefront panel can show approver + workload +
             # credential together -- this is how the talk now demonstrates
             # "audit-ready": Vault's own audit log carries the same three

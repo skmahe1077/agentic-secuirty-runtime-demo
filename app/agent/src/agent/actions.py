@@ -71,16 +71,35 @@ def lookup_order(order_id: int, requester_customer_id: int, session, enforce_own
         "message": f"issued credential {creds['lease_role']} (lease {creds['lease_id']})",
     })
 
-    with _connect(creds) as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(
-            """
-            SELECT o.order_id, o.customer_id, p.name AS product_name, o.total_pence, o.status
-            FROM orders o JOIN products p ON p.product_id = o.product_id
-            WHERE o.order_id = %s
-            """,
-            (order_id,),
-        )
-        row = cur.fetchone()
+    # refund-writer (refund-agent's role) has no SELECT grant on products
+    # -- only orders/refunds (see terraform/vault-config.tf). order-reader
+    # (order-agent's role) does. Once a thread has escalated to refund-agent
+    # (any single "refund" mention sticks for that thread -- see
+    # app/storefront/main.py's _resolve()), a later plain status question on
+    # the SAME thread still routes here through refund-agent and this JOIN
+    # was crashing with a raw 500 instead of a clean denial. Same
+    # InsufficientPrivilege catch pattern as issue_refund's refunds-INSERT
+    # check and lookup_customer_pii's customers-SELECT check below --
+    # PostgreSQL refuses it, not an if-statement. Confirmed live
+    # (2026-10-28, checklist item 9's back-to-back demo-beat run).
+    try:
+        with _connect(creds) as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT o.order_id, o.customer_id, p.name AS product_name, o.total_pence, o.status
+                FROM orders o JOIN products p ON p.product_id = o.product_id
+                WHERE o.order_id = %s
+                """,
+                (order_id,),
+            )
+            row = cur.fetchone()
+    except psycopg2.errors.InsufficientPrivilege:
+        events.append({
+            "type": "denied",
+            "resource": "products",
+            "message": f"{creds['lease_role']}'s database role has no grant on products -- PostgreSQL refused the query",
+        })
+        return "I'm not able to look up order details right now.", events
 
     if row is None:
         return f"I can't find order #{order_id}.", events
